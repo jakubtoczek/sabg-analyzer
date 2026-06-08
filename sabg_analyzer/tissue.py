@@ -56,6 +56,9 @@ class ArtifactParams:
     dark_level: float = 0.45   # max(R,G,B)/255 below this = suspiciously dark
     teal_min: float = 0.04     # opponent score above this = real teal -> keep it
     erode_px: int = 3          # erode the tissue border by this many overview px
+    min_object_px: int = 12    # drop dark components smaller than this (processed px);
+                               # keeps tiny dust/nuclei specks countable, only excludes
+                               # substantial dark debris/folds. 0 = no size filter.
 
 
 def estimate_background(rgb: np.ndarray, p: TissueParams) -> np.ndarray | None:
@@ -125,7 +128,20 @@ def artifact_mask(rgb: np.ndarray, opp: np.ndarray, p: ArtifactParams) -> np.nda
     if not p.enabled:
         return np.zeros(rgb.shape[:2], bool)
     bright = rgb.astype(np.float32).max(axis=2) / 255.0
-    return (bright < p.dark_level) & (opp < p.teal_min)
+    mask = (bright < p.dark_level) & (opp < p.teal_min)
+    if p.min_object_px > 0 and mask.any():
+        mask = _remove_small_objects(mask, p.min_object_px)
+    return mask
+
+
+def _remove_small_objects(mask: np.ndarray, min_px: int) -> np.ndarray:
+    """Drop connected components smaller than *min_px* (so tiny dark specks stay
+    countable instead of being rejected as debris). Tile-safe: real specks are
+    well within a tile, and large debris/folds stay large in each tile."""
+    n, lab, st, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), 8)
+    keep = st[:, cv2.CC_STAT_AREA] >= min_px
+    keep[0] = False                       # component 0 is the background
+    return keep[lab]
 
 
 def erode_mask(mask: np.ndarray, px: int) -> np.ndarray:

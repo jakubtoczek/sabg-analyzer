@@ -65,6 +65,8 @@ artifact:
   dark_level: 0.45     # max(R,G,B)/255 below this = suspiciously dark
   teal_min: 0.04       # opponent score above this = real teal -> keep (not artifact)
   erode_px: 3          # erode the tissue border by this many overview px
+  min_object_px: 12    # drop dark components smaller than this (processed px) so tiny
+                       # dust/nuclei specks stay countable; 0 = no size filter
 
 # ---- Fold rejection (thin LINEAR ridges of folded tissue) ------------------
 # A fold stacks tissue on itself: a thin, directional ridge of higher optical
