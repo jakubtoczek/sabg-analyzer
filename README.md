@@ -71,13 +71,19 @@ Then, top to bottom:
 4. **Info** → opens `sections.csv` and the `labels\` folder (configurable — see
    `gui.info_opens`, e.g. add `thumbs`). Read each slide label, fill the row's columns
    (see below), and save. *(Greyed out until Scan finishes.)*
-5. **Analyze** → quantifies %SABG. A single **live progress line** shows on the status
-   bar at the bottom (per-section + overall % and tiles, with a moving-average ETA);
-   section results and any checkpoints stream into the log. It only warns if a section's
-   **animal-ID fields (or `tag`)** are blank — other optional columns may be empty.
-   Wait for `[exit 0]`.
-6. **Export** → publication FOV figures *(greyed out until Analyze finishes)*.
-7. **Help** opens this README; **Config** opens `outputs\config.yaml` (created from the
+5. **Analyze** → quantifies %SABG **and renders the figures** in one timed pass (the
+   bundled export is on by default — set `output.export_on_analyze: false` for
+   analysis-only, which still writes the section overlays but skips the FOV crops). A
+   single **live progress line** shows on the status bar (per-section + overall % and
+   tiles, with a moving-average ETA); section results, the `[analyze]`/`[export]`/
+   `[total]` timings, and checkpoints stream into the log. It only warns if a section's
+   **animal-ID fields (or `tag`)** are blank. Wait for `[exit 0]`.
+6. **Export** → re-render the figures with the current config *(greyed out until Analyze
+   finishes; needs `output.keep_maps: true` to re-export without re-analyzing)*.
+7. **Stop / Resume** → one toggle: **Stop** ends the running job; once stopped, **Resume**
+   finishes the rest (analyze + export), skipping sections already done. Results are
+   checkpointed after every section, so a Stop never loses completed work.
+8. **Help** opens this README; **Config** opens `outputs\config.yaml` (created from the
    example the first time) to tune thresholds / overlay / alias / export, then re-run.
 
 The GUI is just a front-end for the commands below — anything it does you can also do on
@@ -123,31 +129,45 @@ python -m sabg_analyzer analyze       # shows a live progress/ETA bar in a termi
 ```
 Produces (under `..\outputs`):
 - `results.csv` — `%SABG`, pixel counts, areas (mm²), thresholds, + your metadata
-- `overlays/<file>_s<idx>_overlay.jpg` — QC at `overlay_max_edge` (~4000 px):
-  SABG⁺ = green, dark fold/debris = red, linear-fold band (if `fold.enabled`) = orange
+  (written after **every** section, so a Stop/crash keeps finished work)
+- `sections/<alias>_<variant>.jpg` — whole-section figures, including the QC overlay
+  (SABG⁺ = green, dark fold/debris = red, linear-fold band = orange, edge-shadow =
+  blue, glass/background = grey). Variants are config-driven (see `export`).
 - `debug/<file>_s<idx>_compare.jpg` — 6-panel audit (overview, both scores,
   SABG⁺/artifact masks, overlay, tissue). Add `--full-debug` for the large
   standalone heatmaps too.
 - `config.yaml` — the thresholds that were used (edit + re-run to override)
 
-A full 13-section run writes only ~3 MB of images (compact JPEG). `sections.csv` is
-auto-joined if present; or pass `--metadata path\to\sections.csv`.
+By default `analyze` then runs `export` in the same process (one `[total]` time);
+turn it off with `--no-export` or `output.export_on_analyze: false`. `sections.csv`
+is auto-joined if present; or pass `--metadata path\to\sections.csv`.
 
-Flags: `--full-debug` (extra heatmaps), `--no-progress` / `--progress` (force the ETA
-report off / on — on by default in a terminal, the GUI forces it on through the pipe),
-`--scene FILE:IDX` (one section), `--config config.yaml` (overrides). Sections with
-`analyze=no` in `sections.csv` are skipped.
+Flags: `--export` / `--no-export` (run the figure export after analyze; default on),
+`--continue` (resume: skip sections already in `results.csv`, finish the rest),
+`--full-debug`, `--no-progress` / `--progress`, `--scene FILE:IDX` (one section),
+`--config config.yaml`. Sections with `analyze=no` in `sections.csv` are skipped.
 
-### 3. `export` — publication-quality FOV figures (optional)
+### 3. `export` — publication figures (runs automatically after `analyze`)
 ```powershell
-python -m sabg_analyzer export                       # 5 FOVs/section, 500 µm bar
+python -m sabg_analyzer export                       # 5 FOVs/section
 python -m sabg_analyzer export --fov-um 250 --scalebar-um 50 --n 3
 python -m sabg_analyzer export --no-raw --formats tif png   # only wb, both formats
 ```
-Run **after** `analyze` (it reads the overview maps left in `..\outputs\maps`). For each
-section it picks **clean, representative** full-resolution FOVs — almost entirely tissue
-(no gaps/glass/edges), artifact-light, and with a *local* %SABG close to the section's
-*global* %SABG (typical staining, not the richest hotspot).
+`analyze` already runs this in-process (unless `--no-export`), so you normally don't call
+it directly — use it to **re-render with different settings** without re-analyzing (needs
+`output.keep_maps: true`, since the maps are otherwise cleaned after each run).
+
+It reads the overview maps left in `..\outputs\maps` and writes two kinds of figure:
+
+- **Whole-section figures** → `sections/<alias>_<variant>.jpg`, sized by a fixed
+  magnification (`section_um_per_px`) so each is proportional to its section. A variant
+  is underscore-joined tokens: base `raw`|`wb`, overlay `overlay` (all layers) |
+  `overlaysabg` (SABG only), `fov` (numbered FOV boxes), `scalebar` (adaptive ~1 mm,
+  labelled). Defaults: `raw, wb_scalebar, wb_overlay_fov_scalebar`.
+- **Representative FOV crops** → `exports/…` (skipped when analyze runs with
+  `--no-export`). For each section it picks **clean, representative** full-resolution
+  FOVs — almost entirely tissue (no gaps/glass/edges), artifact-light, and with a
+  *local* %SABG close to the section's *global* %SABG (typical staining, not a hotspot).
 
 Each FOV is written to `..\outputs\exports\` at full resolution with a burned-in scale
 bar, as a matrix of **base × variant**:
@@ -161,9 +181,9 @@ bar, as a matrix of **base × variant**:
   never affects quantification); **raw** is the original for side-by-side validation.
 - **QC overlay** burns in the same green-SABG⁺ / red-artifact overlay as the analysis
   (recomputed at full resolution from `results.csv` thresholds).
-- Formats: **TIFF by default**, lossless DEFLATE-compressed so it's roughly PNG-sized;
-  add `png` with `--formats tif png`. Scale-bar label text is **off by default**
-  (`--scalebar-label` to add the "100 µm" caption).
+- Formats: **JPEG by default** (full-res crops ~10× smaller); use `--formats tif png`
+  for lossless. FOV scale-bar label text is **off by default** (`--scalebar-label` to
+  add the "100 µm" caption); the whole-section scale bar is labelled **on** by default.
 
 Turn any base/variant off (`--no-wb`, `--no-raw`, `--no-plain`, `--no-qc-overlay`) or set
 the defaults in the `export:` block of `config.yaml`. `exports/fovs.csv` records each
@@ -208,11 +228,14 @@ Key knobs (`config.example.yaml` documents them all):
 | `overlay_max_edge` | Long edge (px) of saved overlays + maps. ~4000; raise (6000–8000) for sharper QC. Capped at full res; never affects %SABG. |
 | `overlay.sabg_color` / `sabg_alpha` | SABG⁺ highlight colour + blend (default green, 0.60). |
 | `overlay.artifact_color` / `artifact_alpha` | Artifact highlight colour + blend (default red, 0.60). |
-| `output.overlay` / `debug` / `maps` | Toggle which image outputs `analyze` writes (keep `maps` on if you'll `export`). |
+| `output.debug` / `maps` | Toggle which image outputs `analyze` writes (keep `maps` on for `export`). |
+| `output.export_on_analyze` | Run the figure export after analyze (default on; the section overlay lives in `sections/`). |
+| `output.keep_maps` | Keep `maps/` after export so you can re-run `export` without re-analyzing. |
 | `scenes["<file>:<idx>"].threshold` | Hard manual threshold for one section. |
 | `scenes["<file>:<idx>"].skip` | Exclude a section. |
 
-**How to judge a run:** open `debug/*_compare.jpg`. Green SABG⁺ pixels should sit on the
+**How to judge a run:** open `sections/<alias>_wb_overlay_fov_scalebar.jpg` (or enable
+`output.debug` for the 6-panel `debug/*_compare.jpg`). Green SABG⁺ pixels should sit on the
 faint teal specks, **not** on khaki tissue or background; red marks excluded folds/debris.
 If green bleeds into tissue, raise the threshold; if real specks are missed, lower it. If
 fold *streaks* still come through green, raise `artifact.dark_level` (e.g. 0.55). Compare the
