@@ -63,6 +63,8 @@ class App:
         self._log_fh = None
         self._log_buffer: list[str] = []
         self._proc = None                # the running CLI subprocess (for Stop)
+        self._stopped = False            # a run was stopped -> offer Resume even if
+                                         # no section finished yet (nothing checkpointed)
         root.title("SABG Analyzer")
         root.geometry("880x580")
         root.minsize(740, 470)
@@ -210,7 +212,8 @@ class App:
             sr.configure(text="Stop", state="normal")
         else:
             sr.configure(text="Resume",
-                         state="normal" if (scanned and analyzed) else "disabled")
+                         state="normal" if (scanned and (analyzed or self._stopped))
+                         else "disabled")
 
     # -- subprocess plumbing ----------------------------------------------
     def _run(self, cli_args: list[str], done=None) -> None:
@@ -218,6 +221,7 @@ class App:
         if self.running:
             return
         self.running = True
+        self._stopped = False            # starting a fresh run clears the stop flag
         self._ensure_session_log()
         # The GUI keeps the single session log; tell the CLI not to add its own.
         cli_args = [*cli_args, "--no-run-log"]
@@ -249,9 +253,10 @@ class App:
         proc = self._proc
         if proc is None or proc.poll() is not None:
             return
+        self._stopped = True      # enable Resume even if no section finished yet
         self._log("[gui] stop requested - terminating the current run…")
         try:
-            proc.terminate()      # child writes partial results; resume with Continue
+            proc.terminate()      # finished sections are checkpointed; Resume continues
         except Exception as exc:
             self._log(f"[gui] could not stop: {exc}")
 
