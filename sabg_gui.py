@@ -10,9 +10,12 @@ Buttons
   Data / Output  - browse to the .czi data folder and the output folder
   Scan           - detect sections, extract labels, write sections.csv
   Info           - (after scan) open sections.csv + labels + thumbnails to fill in
-  Analyze        - (after scan) quantify %SABG; warns only if the animal-ID
-                   fields (or a custom tag) are blank
-  Export         - (after analyze) write representative full-res FOV figures
+  Analyze        - (after scan) quantify %SABG, then (default) render the figures
+                   in one timed pass; warns only if the animal-ID fields (or a
+                   custom tag) are blank
+  Export         - (after analyze) re-render the figures with the current config
+  Stop/Resume    - Stop the running job; once stopped, Resume finishes the rest
+                   (analyze + export), skipping sections already done
   Help           - open the README
   Config         - open <output>/config.yaml (created from the example if missing)
   Log            - live, timestamped CLI output
@@ -101,11 +104,15 @@ class App:
         right.pack(side="right")
 
         for name, cmd in (("Scan", self.on_scan), ("Info", self.on_info),
-                          ("Analyze", self.on_analyze), ("Continue", self.on_continue),
-                          ("Export", self.on_export), ("Stop", self.on_stop)):
+                          ("Analyze", self.on_analyze), ("Export", self.on_export)):
             b = tk.Button(left, text=name, width=9, command=cmd)
             b.pack(side="left", padx=3, pady=4)
             self.btn[name] = b
+        # One toggle: "Stop" while a run is in progress, "Resume" when a stopped /
+        # partial run can be continued (covers analyze + its bundled export).
+        b = tk.Button(left, text="Stop", width=9, command=self.on_stop_resume)
+        b.pack(side="left", padx=3, pady=4)
+        self.btn["StopResume"] = b
 
         for name, cmd in (("Help", self.on_help), ("Config", self.on_config)):
             b = tk.Button(right, text=name, width=9, command=cmd)
@@ -196,9 +203,14 @@ class App:
         self.btn["Config"].configure(state="disabled" if busy else "normal")
         self.btn["Info"].configure(state=en(scanned))
         self.btn["Analyze"].configure(state=en(scanned))
-        self.btn["Continue"].configure(state=en(scanned and analyzed))
         self.btn["Export"].configure(state=en(analyzed))
-        self.btn["Stop"].configure(state="normal" if busy else "disabled")
+        # Stop while running; otherwise Resume (enabled once a partial run exists).
+        sr = self.btn["StopResume"]
+        if busy:
+            sr.configure(text="Stop", state="normal")
+        else:
+            sr.configure(text="Resume",
+                         state="normal" if (scanned and analyzed) else "disabled")
 
     # -- subprocess plumbing ----------------------------------------------
     def _run(self, cli_args: list[str], done=None) -> None:
@@ -243,8 +255,19 @@ class App:
         except Exception as exc:
             self._log(f"[gui] could not stop: {exc}")
 
+    def on_stop_resume(self) -> None:
+        """One button: Stop the current run, or Resume a stopped/partial one."""
+        if self.running:
+            self.on_stop()
+        else:
+            self.on_continue()
+
     def on_continue(self) -> None:
-        """Re-run analyze skipping sections already in results.csv (resume)."""
+        """Re-run analyze skipping sections already in results.csv (resume).
+
+        Analyze now bundles export, so this resumes both phases: finished sections
+        (in results.csv) are skipped and their figures (if already on disk) are not
+        re-rendered."""
         args = ["analyze", "--data", self.data_var.get(),
                 "--out", self.out_var.get(), "--progress", "--continue"]
         cfg = Path(self.out_var.get()) / "config.yaml"

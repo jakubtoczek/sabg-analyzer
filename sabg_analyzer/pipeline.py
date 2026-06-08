@@ -489,6 +489,15 @@ def analyze(
         by_file.setdefault(path, []).append(s)
 
     rows: list[dict] = []
+    results = out_dir / "results.csv"
+    results.parent.mkdir(parents=True, exist_ok=True)
+
+    def _checkpoint() -> None:
+        # Persist after each section so a Stop (or crash) keeps finished work;
+        # Resume (analyze --continue) then skips these and finishes the rest.
+        _safe_to_csv(pd.DataFrame(prior_rows + rows), results)
+        _write_config_snapshot(out_dir / "config.yaml", cfg, rows)
+
     try:
         for path, scenes in by_file.items():
             print(f"[analyze] {path.name}")
@@ -501,13 +510,11 @@ def analyze(
                         for c in LABEL_COLUMNS:
                             row[c] = md.get(c, "")
                     rows.append(row)
+                    _checkpoint()
     finally:
         bar.close()
 
-    df = pd.DataFrame(prior_rows + rows)   # prepend resumed rows (continue mode)
-    results = out_dir / "results.csv"
-    results.parent.mkdir(parents=True, exist_ok=True)
-    results = _safe_to_csv(df, results)
+    results = _safe_to_csv(pd.DataFrame(prior_rows + rows), results)
     _write_config_snapshot(out_dir / "config.yaml", cfg, rows)
     if cfg.output.log_files:
         overlay.log_written(out_dir, [results, out_dir / "config.yaml"])
