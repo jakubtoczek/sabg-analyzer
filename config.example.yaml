@@ -236,14 +236,24 @@ export:
   qc_bases: [wb]        # which bases get a qc copy (default wb only -> no raw_qc)
   # output formats: jpg | png | tif. JPEG by default (full-res crops ~10x smaller).
   formats: [jpg]
-  # Whole-section figures (downsampled), written to sections/. Sized by a FIXED
-  # magnification (section_um_per_px) so larger sections give larger images.
-  # Default 3 per section: raw, wb, wb_overlay_fov (overlay + numbered dashed FOV boxes).
+  # Whole-section figures (downsampled), written to sections/ as <alias>_<variant>.
+  # Sized by a FIXED magnification (section_um_per_px) so each figure is proportional
+  # to its source section. A variant is underscore-joined tokens:
+  #   base     raw | wb
+  #   overlay  overlay (all layers) | overlaysabg (SABG positives only)
+  #   fov      numbered dashed FOV boxes
+  #   scalebar burned-in adaptive scale bar
+  # e.g. wb_overlaysabg_scalebar, raw_scalebar. (Legacy wb/wb_overlay/wb_overlay_fov ok.)
   section_figures: true
-  sec_variants: [raw, wb, wb_overlay_fov]  # also available: wb_overlay (no boxes)
+  sec_variants: [raw, wb_scalebar, wb_overlay_fov_scalebar]
   sec_formats: [jpg]
   section_um_per_px: 1.5   # section-figure resolution (µm/px); smaller = bigger image
   section_show_edge: false # draw the blue edge-rejected pixels on section figures
+  # Section scale bar (the `scalebar` token). Default ON + labelled, ~1 mm, adaptive
+  # (snaps to a nice length near the target, <=~40% of the figure width).
+  sec_scalebar_um: 1000      # target bar length (µm); 1000 = 1 mm
+  sec_scalebar_adaptive: true
+  sec_scalebar_label: true   # draw the "1 mm" text (same Arial font as the FOV bar)
   box_color: [0, 0, 0]    # FOV box + number colour
   box_thickness: 2
   box_dash: 14            # dashed-segment length (px; scaled with the figure)

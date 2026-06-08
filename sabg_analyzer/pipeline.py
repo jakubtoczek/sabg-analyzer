@@ -267,8 +267,9 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
     # --- pass 2: count + project positives/artifacts ----------------------
     # Rejected SABG+ inside the fold band is tracked separately so the overlay can
     # still show it (green on top of the orange band) while it stays out of the count.
-    want_fold_pos = (cfg.fold.enabled and cfg.output.overlay
-                     and cfg.overlay.fold_show_sabg)
+    # Rejected SABG+ inside the fold band, tracked for the section/overlay figures
+    # (independent of output.overlay so `export` can paint it on the section figure).
+    want_fold_pos = cfg.fold.enabled and cfg.overlay.fold_show_sabg
     edge_on = cfg.edge.enabled
     px_um_proc = (scene.pixel_size_um / z) if scene.pixel_size_um else None
     expand_px = max(0, int(cfg.detection.expand_px))
@@ -370,6 +371,9 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
         if cfg.fold.enabled:
             mp = maps_dir / f"{alias}_fold.png"
             cv2.imwrite(str(mp), hd_fold.astype(np.uint8) * 255); written.append(mp)
+        if want_fold_pos:
+            mp = maps_dir / f"{alias}_pos_fold.png"
+            cv2.imwrite(str(mp), hd_pos_fold.astype(np.uint8) * 255); written.append(mp)
         if cfg.edge.enabled:
             mp = maps_dir / f"{alias}_edge.png"
             cv2.imwrite(str(mp), hd_edge.astype(np.uint8) * 255); written.append(mp)
@@ -653,6 +657,9 @@ def _export_snapshot(overrides: dict) -> dict:
             "section_figures": d.section_figures, "sec_variants": list(d.sec_variants),
             "sec_formats": list(d.sec_formats), "section_um_per_px": d.section_um_per_px,
             "section_show_edge": d.section_show_edge,
+            "sec_scalebar_um": d.sec_scalebar_um,
+            "sec_scalebar_adaptive": d.sec_scalebar_adaptive,
+            "sec_scalebar_label": d.sec_scalebar_label,
             "box_color": list(d.box_color), "box_thickness": d.box_thickness,
             "box_dash": d.box_dash, "box_label": d.box_label,
             "box_label_margin": d.box_label_margin}

@@ -43,12 +43,17 @@ class ExportParams:
     qc_bases: tuple[str, ...] = ("wb",)  # which bases get a qc copy (default: wb only)
     # Output file formats. JPEG by default (FOV crops are full-res; JPEG ~10x smaller).
     formats: tuple[str, ...] = ("jpg",)
-    # Whole-section figures (downsampled, written to sections/<alias>_section_*).
+    # Whole-section figures (downsampled, written to sections/<alias>_<variant>).
     section_figures: bool = True
-    sec_variants: tuple[str, ...] = ("raw", "wb", "wb_overlay_fov")
+    sec_variants: tuple[str, ...] = ("raw", "wb_scalebar", "wb_overlay_fov_scalebar")
     sec_formats: tuple[str, ...] = ("jpg",)
     section_um_per_px: float = 1.5  # section figure resolution (fixed magnification)
     section_show_edge: bool = False  # draw blue edge-rejected pixels on section figures
+    # Section scale bar (the `scalebar` variant token). Default ON + labelled, ~1 mm,
+    # adaptive (snaps to a nice length near the target, <=~40% of the figure width).
+    sec_scalebar_um: float = 1000.0   # target bar length (µm); 1000 = 1 mm
+    sec_scalebar_adaptive: bool = True
+    sec_scalebar_label: bool = True   # draw the "1 mm" text (same Arial font as FOVs)
     box_color: tuple[int, int, int] = (0, 0, 0)  # FOV box + label colour
     box_thickness: int = 2
     box_dash: int = 14             # dashed-segment length (px); gap = same
@@ -81,8 +86,15 @@ def draw_scalebar(img: np.ndarray, pixel_size_um: float, bar_um: float,
                   (255, 255, 255), -1)
     cv2.rectangle(out, (x1, y1), (x2, y2), color, -1)
     if label:
-        _put_label(out, f"{bar_um:g} µm", (x1, y1 - 4), color)
+        _put_label(out, _fmt_bar(bar_um), (x1, y1 - 4), color)
     return out
+
+
+def _fmt_bar(bar_um: float) -> str:
+    """Scale-bar label: millimetres for >=1 mm, else micrometres."""
+    if bar_um >= 1000:
+        return f"{bar_um / 1000:g} mm"
+    return f"{bar_um:g} µm"
 
 
 def _put_label(img, text, org, color):
@@ -126,18 +138,40 @@ def draw_dashed_rect(img, p1, p2, color, thickness=2, dash=14) -> None:
     _line((x2, y2), (x1, y2)); _line((x1, y2), (x1, y1))
 
 
+# Overlay layer-set "profiles" selectable per section variant (later layers paint
+# on top). A variant whose tokens include one of these keys draws that layer set.
+OVERLAY_PROFILES = {
+    "overlay": ["nontissue", "artifact", "fold", "edge", "pos", "pos_fold"],
+    "overlaysabg": ["pos", "pos_fold"],   # SABG positives only (incl. inside folds)
+}
+
+
+def adaptive_bar_um(width_px: int, um_per_px: float, target_um: float = 1000.0) -> float:
+    """Pick a 'nice' scale-bar length near *target_um* but at most ~40% of the
+    figure width. Falls back to the smallest nice value for tiny figures."""
+    nice = [50, 100, 200, 250, 500, 1000, 2000, 5000, 10000]
+    max_um = 0.4 * width_px * um_per_px
+    cand = [n for n in nice if n <= max_um] or [nice[0]]
+    return float(min(cand, key=lambda n: abs(n - target_um)))
+
+
 def _section_figures(out_dir: Path, alias: str, doc, scene, ov_rgb, ov_tissue,
                      ov_pos, maps_dir: Path, fovs, fov_ov: float, p: ExportParams,
                      cfg) -> list[Path]:
-    """Write the whole-section figures to ``sections/``, sized by a *fixed
-    magnification* (``section_um_per_px``) so the pixel size is consistent and
-    larger sections give larger images.
+    """Write whole-section figures to ``sections/`` as ``{alias}_{variant}`` (no
+    ``section_`` token), sized by the fixed magnification ``section_um_per_px`` so
+    every figure is proportional to its source section.
 
-    Variants (``p.sec_variants``): ``raw`` | ``wb`` | ``wb_overlay``
-    (SABG/artifact/fold[/edge] + grey non-tissue) | ``wb_overlay_fov``
-    (adds numbered dashed boxes at the exported FOVs).
+    Each ``p.sec_variants`` entry is a set of underscore-joined tokens:
+      base      ``raw`` | ``wb``
+      overlay   ``overlay`` (all layers) | ``overlaysabg`` (SABG only)
+      ``fov``       numbered dashed FOV boxes
+      ``scalebar``  burned-in adaptive scale bar (~1 mm, labelled by default)
+    Legacy names (``wb``, ``wb_overlay``, ``wb_overlay_fov``) still parse.
     """
-    want = set(p.sec_variants)
+    variants = list(p.sec_variants)
+    if not variants:
+        return []
     sec_dir = out_dir / "sections"
     formats = p.sec_formats or p.formats
     Hm, Wm = ov_tissue.shape
@@ -152,6 +186,8 @@ def _section_figures(out_dir: Path, alias: str, doc, scene, ov_rgb, ov_tissue,
             base = ov_rgb
     secH, secW = base.shape[:2]
     rs = secW / Wm                       # maps-overview px -> section px
+    sec_um_per_px = ((scene.w / secW) * scene.pixel_size_um
+                     if scene.pixel_size_um else None)   # actual figure µm/px
 
     def _rz(mask):
         if mask is None:
@@ -164,49 +200,69 @@ def _section_figures(out_dir: Path, alias: str, doc, scene, ov_rgb, ov_tissue,
         return None if m is None else _rz(m > 0)
 
     tissue = _rz(ov_tissue); pos = _rz(ov_pos)
-    art = _m("artifact"); fold = _m("fold"); edge = _m("edge")
+    art = _m("artifact"); fold = _m("fold"); edge = _m("edge"); pos_fold = _m("pos_fold")
     nontissue = (~tissue) & (base.max(axis=2) > cfg.tissue.gap_level)
 
-    figs: dict[str, np.ndarray] = {}
-    if "raw" in want:
-        figs["raw"] = base
-    wb = None
-    if want & {"wb", "wb_overlay", "wb_overlay_fov"}:
-        wb = whitebalance.white_balance(base, whitebalance.estimate_white_point(base))
-    if "wb" in want:
-        figs["wb"] = wb
-    ovl = None
-    if want & {"wb_overlay", "wb_overlay_fov"}:
-        layers = []
-        if cfg.overlay.show_nontissue:
-            layers.append((nontissue, cfg.overlay.nontissue_color, cfg.overlay.nontissue_alpha))
-        layers += [(art, cfg.overlay.artifact_color, cfg.overlay.artifact_alpha),
-                   (fold, cfg.overlay.fold_color, cfg.overlay.fold_alpha)]
-        if p.section_show_edge and cfg.edge.enabled:
-            layers.append((edge, cfg.overlay.edge_color, cfg.overlay.edge_alpha))
-        layers.append((pos, cfg.overlay.sabg_color, cfg.overlay.sabg_alpha))
-        ovl = overlay.composite_overlay(wb, layers)
-    if "wb_overlay" in want:
-        figs["wb_overlay"] = ovl
-    if "wb_overlay_fov" in want and ovl is not None:
-        boxed = ovl.copy()
+    layer_specs = {
+        "nontissue": (nontissue, cfg.overlay.nontissue_color, cfg.overlay.nontissue_alpha),
+        "artifact": (art, cfg.overlay.artifact_color, cfg.overlay.artifact_alpha),
+        "fold": (fold, cfg.overlay.fold_color, cfg.overlay.fold_alpha),
+        "edge": (edge, cfg.overlay.edge_color, cfg.overlay.edge_alpha),
+        "pos": (pos, cfg.overlay.sabg_color, cfg.overlay.sabg_alpha),
+        "pos_fold": (pos_fold, cfg.overlay.sabg_color, cfg.overlay.sabg_alpha),
+    }
+    gates = {   # layers conditionally drawn even when listed in a profile
+        "nontissue": cfg.overlay.show_nontissue,
+        "edge": p.section_show_edge and cfg.edge.enabled,
+        "pos_fold": cfg.overlay.fold_show_sabg,
+    }
+
+    def _profile_layers(profile):
+        out = []
+        for name in OVERLAY_PROFILES.get(profile, OVERLAY_PROFILES["overlay"]):
+            spec = layer_specs.get(name)
+            if not gates.get(name, True) or spec is None or spec[0] is None:
+                continue
+            out.append(spec)
+        return out
+
+    cache: dict[str, np.ndarray] = {}
+
+    def _wb():
+        if "wb" not in cache:
+            cache["wb"] = whitebalance.white_balance(
+                base, whitebalance.estimate_white_point(base))
+        return cache["wb"]
+
+    def _boxes(img):
+        out = img.copy()
         half = int(round(fov_ov * rs / 2))
         th = max(1, int(round(p.box_thickness * rs)))
         dash = max(4, int(round(p.box_dash * rs)))
         for i, fov in enumerate(fovs):
             cx, cy = int(fov["cx"] * rs), int(fov["cy"] * rs)
-            draw_dashed_rect(boxed, (cx - half, cy - half), (cx + half, cy + half),
+            draw_dashed_rect(out, (cx - half, cy - half), (cx + half, cy + half),
                              p.box_color, th, dash)
             if p.box_label:
-                _put_label(boxed, str(i + 1),
+                _put_label(out, str(i + 1),
                            (cx - half + p.box_label_margin, cy - half), p.box_color)
-        figs["wb_overlay_fov"] = boxed
+        return out
 
     written: list = []
-    for name, img in figs.items():
-        if img is None:
-            continue
-        written += _save(img, sec_dir / f"{alias}_section_{name}", formats)
+    for variant in variants:
+        toks = variant.split("_")
+        img = _wb() if "wb" in toks else base
+        profile = next((k for k in OVERLAY_PROFILES if k in toks), None)
+        if profile:
+            img = overlay.composite_overlay(img, _profile_layers(profile))
+        if "fov" in toks:
+            img = _boxes(img)
+        if "scalebar" in toks and sec_um_per_px:
+            bar_um = (adaptive_bar_um(secW, sec_um_per_px, p.sec_scalebar_um)
+                      if p.sec_scalebar_adaptive else p.sec_scalebar_um)
+            img = draw_scalebar(img, sec_um_per_px, bar_um, color=p.box_color,
+                                label=p.sec_scalebar_label)
+        written += _save(img, sec_dir / f"{alias}_{variant}", formats)
     return written
 
 
