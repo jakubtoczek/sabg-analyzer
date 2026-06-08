@@ -50,10 +50,13 @@ class OverlayParams:
 class OutputParams:
     """Toggle which image artifacts `analyze` writes. `results.csv` and the
     `config.yaml` snapshot are always written. NB: `export` needs `maps`."""
-    overlay: bool = True   # overlays/<alias>_overlay.jpg
     debug: bool = False    # debug/<alias>_compare.jpg (6-panel audit; off by default)
     maps: bool = True      # maps/<alias>_* (consumed by `export`)
     keep_maps: bool = False  # keep maps/ after `export` (else removed once figures are made)
+    # Run `export` automatically after `analyze` (one timed pipeline). When True the
+    # FOV crops are produced too; when False, analyze still writes the section overlay
+    # figures (so you always get an overlay) but skips the per-FOV crops.
+    export_on_analyze: bool = True
     log_files: bool = True   # log the files written at each step
     run_log: bool = True   # also tee the console output to a timestamped log file
     run_log_name: str = "%Y%m%d-%H%M_run.log"   # strftime template, in the out dir

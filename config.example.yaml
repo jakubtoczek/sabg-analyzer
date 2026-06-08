@@ -175,10 +175,13 @@ overlay:
 # these to skip writing them. NOTE: `export` needs the maps, so keep maps: true
 # if you plan to export figures.
 output:
-  overlay: true   # overlays/<alias>_overlay.jpg (the main QC image)
+  # The whole-section QC overlay now lives in sections/ (rendered by export), so there
+  # is no standalone overlays/ output any more.
   debug: false    # debug/<alias>_compare.jpg (6-panel audit; off by default, ~5x res when on)
   maps: true      # maps/<alias>_* (overview/tissue/pos/...; used by export, then removed)
   keep_maps: false  # keep maps/ after `export` (else removed once figures are made)
+  export_on_analyze: true  # run figure export after analyze (one timed pipeline). false =
+                           # still write section overlays, but skip the per-FOV crops.
   log_files: true   # log the files written at each step (scan/analyze/export)
   run_log: true   # also tee the console output to a timestamped log file in --out
   run_log_name: "%Y%m%d-%H%M_run.log"   # strftime template, e.g. 20260604-1600_run.log

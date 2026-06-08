@@ -14,7 +14,7 @@ Consumes the small overview maps written by `analyze` (maps/<slug>_*), so run
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 import cv2
@@ -25,6 +25,25 @@ from pylibCZIrw import czi as pyczi
 from . import czi_io, overlay, scoring, whitebalance
 from .czi_io import SceneInfo
 from .metadata import _sniff_sep, build_aliases, load_metadata
+
+
+def build_params(cfg, **overrides) -> "ExportParams":
+    """Build :class:`ExportParams` from ``cfg.export`` (the YAML ``export:`` block),
+    with optional explicit *overrides* (e.g. CLI flags). Keys absent everywhere fall
+    back to the dataclass defaults; ``None`` overrides are ignored so a missing CLI
+    flag defers to the config. List values for tuple fields are coerced to tuples."""
+    d = ExportParams()
+    merged = dict(cfg.export or {})
+    merged.update({k: v for k, v in overrides.items() if v is not None})
+    kwargs = {}
+    for f in fields(ExportParams):
+        if f.name not in merged:
+            continue
+        val = merged[f.name]
+        if isinstance(getattr(d, f.name), tuple) and isinstance(val, (list, tuple)):
+            val = tuple(val)
+        kwargs[f.name] = val
+    return ExportParams(**kwargs)
 
 
 @dataclass
@@ -352,7 +371,16 @@ def _qc_masks(crop_rgb, conv, cfg, thr, thr_s, um_per_px=None):
 
 
 def export(data_dir, out_dir, p: ExportParams, cfg,
-           only_scene: str | None = None) -> Path:
+           only_scene: str | None = None, do_fov: bool = True,
+           resume: bool = False, metadata: dict | None = None) -> Path:
+    """Render figures from the maps written by `analyze`.
+
+    *do_fov* False renders only the whole-section figures (the overlay), skipping the
+    per-FOV full-res crops (used by analyze when ``output.export_on_analyze`` is off).
+    *resume* skips scenes whose section figures already exist (Stop/Resume).
+    *metadata* (when bundled with analyze) is reused so aliases match the maps that
+    analyze wrote; standalone it is loaded from ``out_dir/sections.csv``.
+    """
     out_dir = Path(out_dir)
     maps_dir = out_dir / "maps"
     exp_dir = out_dir / "exports"
@@ -387,11 +415,13 @@ def export(data_dir, out_dir, p: ExportParams, cfg,
             if only_scene is None or s.key == only_scene:
                 by_file.setdefault(path, []).append(s)
 
-    # Aliases must match what `analyze` used to name the maps/outputs.
-    sections = out_dir / "sections.csv"
-    meta = load_metadata(sections) if sections.exists() else None
+    # Aliases must match what `analyze` used to name the maps/outputs: reuse the
+    # metadata passed in (bundled run), else load the out-folder sections.csv.
+    if metadata is None:
+        sections = out_dir / "sections.csv"
+        metadata = load_metadata(sections) if sections.exists() else None
     all_scenes = [s for ss in by_file.values() for s in ss]
-    aliases = build_aliases(all_scenes, meta, cfg.alias)
+    aliases = build_aliases(all_scenes, metadata, cfg.alias)
 
     rows = []
     for path, scenes in by_file.items():
@@ -402,7 +432,8 @@ def export(data_dir, out_dir, p: ExportParams, cfg,
                                     aliases.get(s.key, s.slug),
                                     pct_by_key.get(s.key, 0.0),
                                     thr_by_key.get(s.key),
-                                    thrs_by_key.get(s.key))
+                                    thrs_by_key.get(s.key),
+                                    do_fov=do_fov, resume=resume)
                 rows.extend(got)
 
     fovs_csv = exp_dir / "fovs.csv"
@@ -417,7 +448,10 @@ def export(data_dir, out_dir, p: ExportParams, cfg,
         shutil.rmtree(maps_dir, ignore_errors=True)
         print(f"[export] removed maps/ (output.keep_maps=false)")
 
-    print(f"[export] {len(rows)} FOVs -> {exp_dir}")
+    if do_fov:
+        print(f"[export] {len(rows)} FOVs -> {exp_dir}")
+    else:
+        print("[export] section figures only (output.export_on_analyze=false)")
     return fovs_csv
 
 
@@ -429,9 +463,28 @@ def _load_map(maps_dir: Path, slug: str, name: str):
     return img
 
 
+def _scene_done(out_dir: Path, alias: str, p: ExportParams, do_fov: bool) -> bool:
+    """True if this scene's figures already exist on disk (for Stop/Resume skip):
+    every requested section variant present, plus at least one FOV crop when *do_fov*."""
+    sec_dir = out_dir / "sections"
+    formats = p.sec_formats or p.formats
+    if p.section_figures:
+        for v in p.sec_variants:
+            if not any((sec_dir / f"{alias}_{v}").with_suffix("." + ext).exists()
+                       for ext in formats):
+                return False
+    if do_fov and not list((out_dir / "exports").glob(f"{alias}_fov0_*")):
+        return False
+    return True
+
+
 def _export_scene(doc, s: SceneInfo, out_dir: Path, p: ExportParams, cfg, conv,
                   alias: str, global_pct: float, thr: float | None,
-                  thr_s: float | None) -> list[dict]:
+                  thr_s: float | None, do_fov: bool = True,
+                  resume: bool = False) -> list[dict]:
+    if resume and _scene_done(out_dir, alias, p, do_fov):
+        print(f"        {s.key} [{alias}]: figures present, skipping (resume)")
+        return []
     maps_dir = out_dir / "maps"
     ov_bgr = cv2.imread(str(maps_dir / f"{alias}_overview.jpg"))
     ov_tissue = _load_map(maps_dir, alias, "tissue")
@@ -460,6 +513,11 @@ def _export_scene(doc, s: SceneInfo, out_dir: Path, p: ExportParams, cfg, conv,
     if p.section_figures:
         sec_written = _section_figures(out_dir, alias, doc, s, ov_rgb, ov_tissue,
                                        ov_pos, maps_dir, fovs, fov_ov, p, cfg)
+
+    if not do_fov:   # section figures only (analyze with export_on_analyze=false)
+        if cfg.output.log_files and sec_written:
+            overlay.log_written(out_dir, sec_written)
+        return []
 
     if not fovs:
         if cfg.output.log_files and sec_written:

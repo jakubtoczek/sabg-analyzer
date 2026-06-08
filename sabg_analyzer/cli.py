@@ -106,6 +106,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="also write large standalone heatmaps (default: compact)")
     a.add_argument("--continue", "--reuse", dest="continue_run", action="store_true",
                    help="resume: skip sections already in results.csv and append the rest")
+    a.add_argument("--export", dest="export_on_analyze", default=None,
+                   action=argparse.BooleanOptionalAction,
+                   help="run figure export after analyze (default on; --no-export keeps "
+                        "the section overlays but skips the per-FOV crops)")
 
     e = sub.add_parser("export", help="export representative full-res FOV figures")
     _add_common(e)
@@ -162,6 +166,8 @@ def _dispatch(args) -> int:
         cfg = load_config(args.config)
         if args.full_debug:
             cfg.full_debug = True
+        if args.export_on_analyze is not None:
+            cfg.output.export_on_analyze = args.export_on_analyze
         metadata = None
         if args.metadata:
             metadata = load_metadata(args.metadata)
@@ -178,44 +184,17 @@ def _dispatch(args) -> int:
         return 0
 
     if args.command == "export":
-        from .export import ExportParams, export
+        from .export import build_params, export
         cfg = load_config(args.config)
-        # precedence: CLI flag (if given) > config `export:` block > dataclass default
-        defaults = ExportParams()
-        cm = cfg.export
-
-        def pick(cli_val, key):
-            if cli_val is not None:
-                return cli_val
-            if key in cm:
-                return cm[key]
-            return getattr(defaults, key)
-
-        formats = (tuple(args.formats) if args.formats is not None
-                   else tuple(cm.get("formats", defaults.formats)))
-        p = ExportParams(
-            fov_um=pick(args.fov_um, "fov_um"),
-            scalebar_um=pick(args.scalebar_um, "scalebar_um"),
-            scalebar_label=pick(args.scalebar_label, "scalebar_label"),
-            n_fov=pick(args.n, "n_fov"),
-            min_tissue_frac=pick(args.min_tissue, "min_tissue_frac"),
-            wb=pick(args.wb, "wb"),
-            raw=pick(args.raw, "raw"),
-            plain=pick(args.plain, "plain"),
-            qc_overlay=pick(args.qc_overlay, "qc_overlay"),
-            formats=formats,
-            qc_bases=tuple(pick(None, "qc_bases")),
-            # whole-section figures (config-only; no CLI flags)
-            section_figures=pick(None, "section_figures"),
-            sec_variants=tuple(pick(None, "sec_variants")),
-            sec_formats=tuple(pick(None, "sec_formats")),
-            section_um_per_px=pick(None, "section_um_per_px"),
-            section_show_edge=pick(None, "section_show_edge"),
-            box_color=tuple(pick(None, "box_color")),
-            box_thickness=pick(None, "box_thickness"),
-            box_dash=pick(None, "box_dash"),
-            box_label=pick(None, "box_label"),
-            box_label_margin=pick(None, "box_label_margin"),
+        # precedence: CLI flag (if given) > config `export:` block > dataclass default.
+        # build_params drops None overrides, so an absent flag defers to the config.
+        p = build_params(
+            cfg,
+            fov_um=args.fov_um, scalebar_um=args.scalebar_um,
+            scalebar_label=args.scalebar_label, n_fov=args.n,
+            min_tissue_frac=args.min_tissue, wb=args.wb, raw=args.raw,
+            plain=args.plain, qc_overlay=args.qc_overlay,
+            formats=(tuple(args.formats) if args.formats is not None else None),
         )
         export(args.data, args.out, p, cfg, only_scene=args.scene)
         return 0

@@ -352,10 +352,8 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
                           interpolation=cv2.INTER_NEAREST).astype(bool)
                if cfg.fold.enabled else np.zeros((Hh, Wh), bool))
 
-    # HD tissue (for the maps + the grey non-tissue overlay shade). Non-tissue =
-    # not tissue and not a black mosaic gap (gaps stay black, glass goes grey).
+    # HD tissue for the maps (export derives the grey non-tissue shade per figure).
     hd_tissue = segment_tissue(hd_rgb, tcfg)
-    hd_nontissue = (~hd_tissue) & (hd_rgb.max(axis=2) > tcfg.gap_level)
 
     # --- overview maps (higher-res; consumed by `export`) -----------------
     written: list = []
@@ -378,25 +376,8 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
             mp = maps_dir / f"{alias}_edge.png"
             cv2.imwrite(str(mp), hd_edge.astype(np.uint8) * 255); written.append(mp)
 
-    # --- outputs: HD overlay (grey non-tissue / red debris / orange fold /
-    #     blue edge-shadow / green SABG) + debug
-    if cfg.output.overlay:
-        layers = []
-        if cfg.overlay.show_nontissue:   # bottom: shade glass/background grey
-            layers.append((hd_nontissue, cfg.overlay.nontissue_color,
-                           cfg.overlay.nontissue_alpha))
-        layers += [
-            (hd_art, cfg.overlay.artifact_color, cfg.overlay.artifact_alpha),
-            (hd_fold, cfg.overlay.fold_color, cfg.overlay.fold_alpha),
-        ]
-        if cfg.edge.enabled and cfg.overlay.show_edge_rejected:
-            layers.append((hd_edge, cfg.overlay.edge_color, cfg.overlay.edge_alpha))
-        layers.append((hd_pos, cfg.overlay.sabg_color, cfg.overlay.sabg_alpha))
-        if want_fold_pos:   # rejected SABG+ inside the band, green on top of orange
-            layers.append((hd_pos_fold, cfg.overlay.sabg_color, cfg.overlay.sabg_alpha))
-        ovl = overlay.composite_overlay(hd_rgb, layers)
-        op = out_dir / "overlays" / f"{alias}_overlay.jpg"
-        overlay.save_jpg(op, ovl, quality=92); written.append(op)
+    # The whole-section QC overlay now lives in sections/ (rendered by `export` from
+    # the maps written above), so analyze no longer writes a standalone overlays/.
 
     if cfg.output.debug:
         opp_ov = scoring.opponent_score(ov_rgb)
@@ -456,6 +437,8 @@ def analyze(
     show_progress: bool | None = None,
     continue_run: bool = False,
 ) -> Path:
+    import time
+    t_start = time.perf_counter()
     out_dir = Path(out_dir)
     files = czi_io.list_czi_files(data_dir)
     if not files:
@@ -528,7 +511,26 @@ def analyze(
     _write_config_snapshot(out_dir / "config.yaml", cfg, rows)
     if cfg.output.log_files:
         overlay.log_written(out_dir, [results, out_dir / "config.yaml"])
-    print(f"[analyze] {len(rows)} sections -> {results}")
+    analyze_secs = time.perf_counter() - t_start
+    from .progress import _fmt
+    print(f"[analyze] {len(rows)} sections -> {results}  (analysis {_fmt(analyze_secs)})")
+
+    # Bundled export: one timed pipeline (analyze + figures). With export_on_analyze
+    # off we still render the section overlays (do_fov=False) so there's always an
+    # overlay; on, the per-FOV crops are produced too.
+    if cfg.output.maps and (out_dir / "maps").exists():
+        from .export import build_params, export as _run_export
+        t_exp = time.perf_counter()
+        try:
+            _run_export(data_dir, out_dir, build_params(cfg), cfg,
+                        only_scene=only_scene, metadata=metadata,
+                        do_fov=cfg.output.export_on_analyze, resume=continue_run)
+            print(f"[export] done  (export {_fmt(time.perf_counter() - t_exp)})")
+        except Exception as exc:                      # don't lose results on a figure error
+            print(f"  ! export failed: {exc}")
+    else:
+        print("[export] skipped (no maps/ to render from)")
+    print(f"[total] analyze + export in {_fmt(time.perf_counter() - t_start)}")
     return results
 
 
@@ -621,10 +623,10 @@ def _write_config_snapshot(path: Path, cfg: Config, rows: list[dict]) -> None:
                     "nontissue_color": list(cfg.overlay.nontissue_color),
                     "nontissue_alpha": cfg.overlay.nontissue_alpha,
                     "show_nontissue": cfg.overlay.show_nontissue},
-        "output": {"overlay": cfg.output.overlay,
-                   "debug": cfg.output.debug,
+        "output": {"debug": cfg.output.debug,
                    "maps": cfg.output.maps,
                    "keep_maps": cfg.output.keep_maps,
+                   "export_on_analyze": cfg.output.export_on_analyze,
                    "log_files": cfg.output.log_files,
                    "run_log": cfg.output.run_log,
                    "run_log_name": cfg.output.run_log_name},
