@@ -85,6 +85,9 @@ fold:
   min_length_um: 300   # ignore structures shorter than this
   max_width_um: 80     # ignore structures wider than this (not a thin fold)
   min_aspect: 3.0      # length/width must exceed this (elongated)
+  ecc_min: 0.92        # eccentricity gate (moment-based): reject round blobs / bubble
+                       # rings (~0); keep straight/curved ridges (~0.97+). Lower = keep
+                       # more curved structures; raise toward 1 to demand near-straight.
   band_width_um: 60    # dilate the detected ridge into a rejection band
   ridge_min: 0.12      # Frangi gate (agreement | union | frangi_only)
   coherence_min: 0.30  # structure-tensor gate (agreement | union)

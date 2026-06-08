@@ -588,6 +588,7 @@ def _write_config_snapshot(path: Path, cfg: Config, rows: list[dict]) -> None:
                  "min_length_um": cfg.fold.min_length_um,
                  "max_width_um": cfg.fold.max_width_um,
                  "min_aspect": cfg.fold.min_aspect,
+                 "ecc_min": cfg.fold.ecc_min,
                  "band_width_um": cfg.fold.band_width_um,
                  "ridge_min": cfg.fold.ridge_min,
                  "coherence_min": cfg.fold.coherence_min,

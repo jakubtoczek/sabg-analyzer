@@ -49,6 +49,11 @@ class FoldParams:
     min_length_um: float = 300.0    # ignore structures shorter than this
     max_width_um: float = 80.0      # ignore structures wider than this (not a fold)
     min_aspect: float = 3.0         # length/width must exceed this
+    ecc_min: float = 0.92           # moment-based eccentricity gate: reject round
+                                    # blobs / bubble rings (~0) while keeping straight
+                                    # or gently-curved ridges (~0.97+). Unlike the
+                                    # perimeter-based aspect, eccentricity is not
+                                    # inflated by a rough/ring boundary.
     band_width_um: float = 60.0     # dilate the kept ridge into a band
     ridge_min: float = 0.12         # Frangi gate (agreement | union | frangi_only)
     coherence_min: float = 0.30     # structure-tensor gate (agreement | union)
@@ -143,12 +148,16 @@ def detect_folds(signal: np.ndarray, ov_um_per_px: float | None,
         major = getattr(r, "axis_major_length", None)
         if major is None:                       # older skimage
             major = r.major_axis_length
-        length_px = max(r.perimeter / 2.0, major, 1.0)  # arc-robust
+        length_px = max(r.perimeter / 2.0, major, 1.0)  # arc-robust (keeps curves)
         width_px = r.area / length_px
         aspect = length_px / max(width_px, 1e-6)
+        # The perimeter-based length is arc-robust but explodes for rough/ring
+        # boundaries, so aspect alone passes round blobs. The moment-based
+        # eccentricity (~0 for disks/rings, ~1 for lines) is the blob-rejector.
         if (length_px * ov_um_per_px >= p.min_length_um
                 and width_px * ov_um_per_px <= p.max_width_um
-                and aspect >= p.min_aspect):
+                and aspect >= p.min_aspect
+                and r.eccentricity >= p.ecc_min):
             keep[lab == r.label] = True
     if not keep.any():
         return np.zeros((H, W), bool)
