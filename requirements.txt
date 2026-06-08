@@ -1,0 +1,9 @@
+# SABG Analyzer dependencies
+pylibCZIrw>=4.0      # tiled / region full-res reads of CZI mosaics
+czifile>=2019.7.2    # extract the slide Label attachment (pylibCZIrw exposes none)
+scikit-image>=0.22   # color deconvolution, triangle/otsu thresholds, morphology
+numpy>=1.24
+opencv-python>=4.8   # fast resize / morphology
+pandas>=2.0          # results & sections tables
+matplotlib>=3.7      # debug figures
+PyYAML>=6.0          # config files

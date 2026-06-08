@@ -1,0 +1,254 @@
+# ============================================================================
+# SABG Analyzer configuration (example)
+# Copy to config.yaml and edit, then:  python -m sabg_analyzer analyze --config config.yaml
+# Every key is optional; omitted keys fall back to the defaults shown here.
+# ============================================================================
+
+# ---- Reading / performance -------------------------------------------------
+# Scale at which scenes are processed. 1.0 = full resolution (recommended).
+# SABG signal is punctate and is DESTROYED by heavy downsampling:
+#   1.0 -> full signal | 0.5 -> ~ok | 0.3 -> floor | 0.08 -> signal gone.
+# Lower this only to trade accuracy for speed, and check the overlays after.
+process_zoom: 1.0
+
+# Full-resolution tile size (px) used to stream each large scene through RAM.
+tile_size: 4096
+
+# Long edge (px) of the downscaled overview canvas used for tissue gating,
+# the score histogram, and the 6-panel debug figure.
+overview_max_edge: 1400
+
+# Long edge (px) of the HIGHER-resolution canvas used for the saved overlays and
+# the maps consumed by `export`. Decoupled from overview_max_edge so QC overlays
+# can be detailed without slowing the histogram/gating pass. ~4000 keeps the
+# punctate signal verifiable; raise (e.g. 6000-8000) for more detail at the cost
+# of larger files / a bit more time. Capped at full resolution (process_zoom);
+# quantification is always full-res, so this never affects the reported %SABG.
+overlay_max_edge: 4000
+
+# Also write the large standalone debug heatmaps (tissue/score/mask) per scene.
+# They are redundant with the *_compare.jpg panel and ~10x the disk, so off by
+# default. CLI: `--full-debug`.
+full_debug: false
+
+# ---- Tissue segmentation (separates tissue from glass + mosaic gaps) --------
+# The fixed white test only catches truly white glass. Many slides have a pale
+# *tinted* (beige) background that reads as tissue -> the `adaptive` model fixes
+# that: it estimates the glass colour per scene and marks a pixel as glass only if
+# it is (a) close to that colour, (b) not teal, AND (c) texture-smooth. The teal +
+# texture guards keep faint, near-glass-coloured (but cellularly textured) tissue.
+# Audit/tune with the grey non-tissue shade in the overlay (overlay.show_nontissue).
+tissue:
+  gap_level: 15        # max(R,G,B) below this = unsampled black mosaic gap -> not tissue
+  white_level: 0.92    # brightness above this (0-1) ...
+  sat_min: 0.10        # ... AND saturation below this = white glass -> not tissue
+  min_object_px: 2000  # remove tissue specks smaller than this (at overview scale)
+  fill_holes: false    # filling can re-absorb glass/gaps as tissue on faint sections
+  adaptive: true       # also remove pale/tinted glass the fixed white test misses
+  bg_margin: 0.086     # RGB distance (0-1) within which a pixel matches the glass colour
+  bg_bright_quantile: 0.75  # glass colour = median of the brightest this-fraction of pixels
+  bg_teal_guard: 0.03  # opponent score above this => keep as tissue (never glass)
+  texture_min: 0.0045  # local std above this => textured => tissue (lower=more sensitive; higher=less)
+  texture_win: 15      # window (px) for the local-std texture estimate (wider = fewer interior holes)
+  close_px: 3          # morphological close to solidify textured tissue (overview only)
+  fill_holes_max_frac: 0.0012  # fill enclosed non-tissue holes up to this frame fraction (de-speckle)
+  bg_max_tissue_frac: 0.97     # if adaptive keeps more than this, retry with a stricter glass estimate
+# Per-scene tissue overrides go under scenes.<file:idx>.tissue (see the `scenes` block).
+
+# ---- Artifact rejection (folds / debris / edge halos) ----------------------
+# Tissue folds stack tissue on itself: dark in every channel, which a
+# deconvolution SABG score mistakes for stain. Flag pixels that are dark AND
+# not teal, and erode the tissue border. Artifact pixels are removed from both
+# the numerator and the denominator of %SABG (and drawn red in the overlay).
+artifact:
+  enabled: true
+  dark_level: 0.45     # max(R,G,B)/255 below this = suspiciously dark
+  teal_min: 0.04       # opponent score above this = real teal -> keep (not artifact)
+  erode_px: 3          # erode the tissue border by this many overview px
+
+# ---- Fold rejection (thin LINEAR ridges of folded tissue) ------------------
+# A fold stacks tissue on itself: a thin, directional ridge of higher optical
+# density. `source: density` finds those ridges in the tissue OPTICAL-DENSITY
+# excess (a fold is locally darker than its surroundings), so it catches the
+# physical fold whether or not it is stained - then a Hessian ridge filter (Sato)
+# + structure-tensor coherence, length/width/aspect guards, and band dilation.
+# Drawn ORANGE; reported as fold_px / fold_area_mm2; excluded from tissue area.
+# Tune on the overlay (raise score_min / shrink band if too much is flagged).
+#   source: sabg  -> legacy: ridges of the SABG+ density (misses strong-stained folds).
+fold:
+  enabled: true
+  source: density      # density (tissue OD ridges) | sabg (legacy SABG+ ridges)
+  hp_um: 150           # density high-pass scale (keep local excess over this neighbourhood)
+  border_um: 40        # ignore this much tissue border (its outline is a density edge)
+  combine: product     # product (soft AND) | agreement (hard AND) | union (OR) | frangi_only
+  smooth_um: 15        # density smoothing sigma
+  min_length_um: 300   # ignore structures shorter than this
+  max_width_um: 80     # ignore structures wider than this (not a thin fold)
+  min_aspect: 3.0      # length/width must exceed this (elongated)
+  band_width_um: 60    # dilate the detected ridge into a rejection band
+  ridge_min: 0.12      # Frangi gate (agreement | union | frangi_only)
+  coherence_min: 0.30  # structure-tensor gate (agreement | union)
+  score_min: 0.05      # threshold for the `product` score (lower = more rejected; density scale)
+  exclude_from_tissue: true   # drop band from the denominator too (else numerator only)
+
+# ---- Edge-shadow rejection (thin false SABG+ at cell boundaries) -----------
+# Cell/structure edges cast thin shadows a deconvolution score reads as stain
+# (false positives shaped like a filigree tracing edges); real signal is wider.
+# Two cues (an agreement of shape + colour) refine the SABG+ mask (numerator only;
+# the rejected pixels are drawn blue for audit):
+#   * morph_open    - a small opening drops structures thinner than min_width_um
+#                     (kept tiny so faint real specks in small zones survive)
+#   * reject_shadow - drops pixels that are both dark AND achromatic (the shadow
+#                     signature); pale-but-teal real signal keeps its colour.
+# Reported as edge_px / edge_area_mm2 (the SABG+ pixels removed by this filter).
+edge:
+  enabled: true
+  morph_open: true
+  min_width_um: 1.5       # opening kernel diameter (~3-4 px at 0.44 um/px)
+  reject_shadow: true
+  shadow_dark_level: 0.60  # brightness (0-1) below this = dark
+  shadow_sat_min: 0.10     # saturation below this = achromatic (near-grey)
+
+# ---- SABG detection --------------------------------------------------------
+detection:
+  # Which score drives the headline %SABG: "deconvolution" or "opponent".
+  # Both are always computed and exported for comparison.
+  primary: deconvolution
+
+  # Require BOTH scores (deconvolution AND opponent) to fire for a pixel to count
+  # as SABG+. Deconvolution alone over-calls dense/dark tissue; demanding teal
+  # agreement (opponent) removes most false positives. Set false for the old
+  # single-score behaviour.
+  require_agreement: true
+
+  # Grow the final SABG+ mask by this many px (after the edge filter) to recover
+  # faint staining trimmed by a conservative threshold. 0 = off.
+  expand_px: 1
+
+  # Color-deconvolution stain vectors in RGB optical-density space.
+  # Row 0 = SABG (teal/cyan), row 1 = tissue counterstain, row 2 = residual.
+  # null -> use the built-in defaults estimated from the example slides.
+  # Set "auto_estimate: true" to estimate the SABG vector per-scene instead.
+  stain_matrix: null
+  auto_estimate: false
+
+# ---- Thresholding ----------------------------------------------------------
+threshold:
+  # method: triangle | otsu | percentile | fixed
+  #   triangle    -> robust for sparse/skewed signal (default)
+  #   otsu        -> classic bimodal (only if signal is abundant)
+  #   percentile  -> threshold = given percentile of tissue scores
+  #   fixed       -> use threshold.value directly
+  method: triangle
+  percentile: 99.0     # used when method == percentile
+  value: null          # used when method == fixed
+  min_score: 0.0       # never threshold below this (guardrail against noise)
+  scale: 0.85          # multiply the auto threshold (<1 = more sensitive; 1 = off)
+  # SPEED: derive the threshold from the in-memory overview and SKIP the full-res
+  # pass 1 (~2x faster). The threshold can shift slightly (the sparse signal tail
+  # is thinner when downsampled), so it's off by default; turn on for quick looks.
+  from_overview: false
+
+# ---- Overlay / QC appearance ----------------------------------------------
+overlay:
+  sabg_color: [0, 200, 0]      # RGB highlight for SABG+ pixels (green)
+  sabg_alpha: 0.60             # SABG+ blend strength (0-1)
+  artifact_color: [220, 0, 0]  # RGB highlight for dark fold/debris pixels (red)
+  artifact_alpha: 0.60         # artifact blend strength (0-1)
+  fold_color: [255, 140, 0]    # RGB highlight for the linear-fold band (orange)
+  fold_alpha: 0.60             # fold blend strength (0-1)
+  fold_show_sabg: true         # also draw the rejected SABG+ (green) inside the orange band
+  edge_color: [60, 120, 255]   # RGB highlight for edge-shadow rejected pixels (blue)
+  edge_alpha: 0.50             # edge blend strength (0-1)
+  show_edge_rejected: true     # draw the edge-rejected pixels in the overlay
+  nontissue_color: [150, 150, 150]  # RGB shade for glass/background (grey)
+  nontissue_alpha: 0.50        # non-tissue shade strength (0-1; higher = easier to see)
+  show_nontissue: true         # shade non-tissue so the tissue mask can be audited
+
+# ---- Which image outputs `analyze` writes ---------------------------------
+# results.csv and the config.yaml snapshot are always written. Turn off any of
+# these to skip writing them. NOTE: `export` needs the maps, so keep maps: true
+# if you plan to export figures.
+output:
+  overlay: true   # overlays/<alias>_overlay.jpg (the main QC image)
+  debug: false    # debug/<alias>_compare.jpg (6-panel audit; off by default, ~5x res when on)
+  maps: true      # maps/<alias>_* (overview/tissue/pos/...; used by export, then removed)
+  keep_maps: false  # keep maps/ after `export` (else removed once figures are made)
+  log_files: true   # log the files written at each step (scan/analyze/export)
+  run_log: true   # also tee the console output to a timestamped log file in --out
+  run_log_name: "%Y%m%d-%H%M_run.log"   # strftime template, e.g. 20260604-1600_run.log
+
+# ---- Progress / ETA report -------------------------------------------------
+# A single live line re-actualises in place for the current section, then moves
+# on to the next. The ETA uses a moving average of the recent tile rate (so the
+# slow library warm-up doesn't skew it). In the GUI the live line shows on the
+# status bar; checkpoints + section results go to the scrolling log.
+progress:
+  section: true        # show per-section progress (% + tiles)
+  total: true          # show overall progress (% + tiles)
+  elapsed: true        # show elapsed time
+  eta: true            # show estimated time remaining
+  checkpoints: []      # leave a persistent line at these per-section %, e.g. [50] or [25, 50, 75]
+
+# ---- GUI-only options ------------------------------------------------------
+gui:
+  # What the Info button opens. Any of: sections, labels, thumbs.
+  info_opens: [sections, labels]
+
+# ---- Section alias (used in results.csv + every output filename) ----------
+# Each section gets a short, human-readable id built from the sections.csv
+# metadata, e.g. "80_ctl" instead of "2026_05_29__10215_s1".
+#   fields   - always included, joined by `spacer`        (default animal, group)
+#   optional - appended ONLY to break ties between sections (default tissue),
+#              e.g. 80_ctl_liver / 80_ctl_skin when two share animal+group
+#   tag_field- if this sections.csv column is filled, it overrides everything
+# With nothing filled, the alias falls back to the raw scene id.
+alias:
+  fields: [animal, group]
+  optional: [tissue]
+  spacer: "_"
+  tag_field: tag
+
+# ---- Publication figure export (`export` subcommand) ----------------------
+# DEFAULTS for `export`; any CLI flag (e.g. --fov-um, --no-wb) overrides the
+# matching value here. White balance is applied to figures ONLY; quantification
+# stays on raw pixels.
+#
+# Each FOV is rendered full-res as base (wb / raw) x variant (plain / qc); by
+# default qc_bases=[wb] so you get raw, wb, wb_qc (no raw_qc). JPEG by default.
+export:
+  fov_um: 500           # FOV side length in micrometres (~1137 px at 0.44 µm/px)
+  scalebar_um: 100      # burned-in scale bar length
+  scalebar_label: false # draw the "100 µm" text; false = bare bar
+  n_fov: 5              # representative FOVs per section
+  min_tissue_frac: 0.85 # a FOV must be at least this fraction tissue (no gaps/edges)
+  # base colour renderings
+  wb: true              # white-balanced (background neutralised to white)
+  raw: true             # original colours
+  # variants of each base
+  plain: true           # clean image, no overlay
+  qc_overlay: true      # SABG+/artifact overlay burned in (green/red); needs results.csv
+  qc_bases: [wb]        # which bases get a qc copy (default wb only -> no raw_qc)
+  # output formats: jpg | png | tif. JPEG by default (full-res crops ~10x smaller).
+  formats: [jpg]
+  # Whole-section figures (downsampled), written to sections/. Sized by a FIXED
+  # magnification (section_um_per_px) so larger sections give larger images.
+  # Default 3 per section: raw, wb, wb_overlay_fov (overlay + numbered dashed FOV boxes).
+  section_figures: true
+  sec_variants: [raw, wb, wb_overlay_fov]  # also available: wb_overlay (no boxes)
+  sec_formats: [jpg]
+  section_um_per_px: 1.5   # section-figure resolution (µm/px); smaller = bigger image
+  section_show_edge: false # draw the blue edge-rejected pixels on section figures
+  box_color: [0, 0, 0]    # FOV box + number colour
+  box_thickness: 2
+  box_dash: 14            # dashed-segment length (px; scaled with the figure)
+  box_label: true         # draw 1,2,... at each box's top-left
+  box_label_margin: 6     # small gap to the left of the number
+
+# ---- Per-scene manual overrides -------------------------------------------
+# Keyed by "<file_stem>:<scene_index>". Anything here wins over auto values.
+# `analyze` writes the auto thresholds back here so you can tweak and re-run.
+scenes:
+  # 2026_05_29__10215:0:
+  #   threshold: 0.18
+  #   skip: false

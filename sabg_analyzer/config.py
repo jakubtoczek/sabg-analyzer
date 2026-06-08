@@ -1,0 +1,225 @@
+"""Configuration loading and defaults.
+
+A YAML file (see ``config.example.yaml``) overrides the dataclass defaults
+below. Per-scene overrides live under ``scenes[<file_stem>:<idx>]``.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import yaml
+
+from .edge import EdgeFilterParams
+from .fold import FoldParams
+from .scoring import build_stain_matrix
+from .threshold import ThresholdParams
+from .tissue import ArtifactParams, TissueParams
+
+
+@dataclass
+class DetectionParams:
+    primary: str = "deconvolution"          # deconvolution | opponent
+    stain_matrix: np.ndarray | None = None  # 3x3, rows = SABG/counter/residual
+    auto_estimate: bool = False
+    require_agreement: bool = True          # SABG+ only where BOTH scores fire
+    expand_px: int = 1                      # dilate the final positive mask by this many px
+
+
+@dataclass
+class OverlayParams:
+    sabg_color: tuple[int, int, int] = (0, 200, 0)      # SABG+ highlight (green)
+    sabg_alpha: float = 0.60                            # SABG+ blend strength
+    artifact_color: tuple[int, int, int] = (220, 0, 0)  # dark fold/debris (red)
+    artifact_alpha: float = 0.60                        # artifact blend strength
+    fold_color: tuple[int, int, int] = (255, 140, 0)    # linear-fold band (orange)
+    fold_alpha: float = 0.60                            # fold blend strength
+    fold_show_sabg: bool = True   # draw rejected SABG+ (green) on top of the fold band
+    edge_color: tuple[int, int, int] = (60, 120, 255)   # edge-shadow rejection (blue)
+    edge_alpha: float = 0.50                            # edge blend strength
+    show_edge_rejected: bool = True                     # draw the edge-rejected pixels
+    nontissue_color: tuple[int, int, int] = (150, 150, 150)  # glass/background (grey)
+    nontissue_alpha: float = 0.50                       # non-tissue shade strength
+    show_nontissue: bool = True                         # shade non-tissue to audit the mask
+
+
+@dataclass
+class OutputParams:
+    """Toggle which image artifacts `analyze` writes. `results.csv` and the
+    `config.yaml` snapshot are always written. NB: `export` needs `maps`."""
+    overlay: bool = True   # overlays/<alias>_overlay.jpg
+    debug: bool = False    # debug/<alias>_compare.jpg (6-panel audit; off by default)
+    maps: bool = True      # maps/<alias>_* (consumed by `export`)
+    keep_maps: bool = False  # keep maps/ after `export` (else removed once figures are made)
+    log_files: bool = True   # log the files written at each step
+    run_log: bool = True   # also tee the console output to a timestamped log file
+    run_log_name: str = "%Y%m%d-%H%M_run.log"   # strftime template, in the out dir
+
+
+@dataclass
+class ProgressParams:
+    """What the progress reporter shows. The live line re-actualises in place
+    (one section at a time); `checkpoints` leaves a persistent line behind at
+    the given per-section percentages (e.g. [50] or [25, 50, 75])."""
+    section: bool = True            # per-section progress (% + tiles)
+    total: bool = True              # overall progress (% + tiles)
+    elapsed: bool = True            # show elapsed time
+    eta: bool = True                # show estimated time remaining
+    checkpoints: list[float] = field(default_factory=list)   # persistent marks
+
+
+@dataclass
+class GuiParams:
+    """GUI-only knobs (read by sabg_gui.py)."""
+    info_opens: list[str] = field(default_factory=lambda: ["sections", "labels"])
+
+
+@dataclass
+class AliasParams:
+    """How each section's short alias (used in results + filenames) is built
+    from the `sections.csv` metadata. `tag` (if filled) always wins."""
+    fields: list[str] = field(default_factory=lambda: ["animal", "group"])
+    optional: list[str] = field(default_factory=lambda: ["tissue"])
+    spacer: str = "_"
+    tag_field: str = "tag"
+
+
+@dataclass
+class Config:
+    process_zoom: float = 1.0
+    tile_size: int = 4096
+    overview_max_edge: int = 1400      # gating/histogram/debug overview
+    overlay_max_edge: int = 4000       # higher-res canvas for overlays + maps
+    full_debug: bool = False
+    tissue: TissueParams = field(default_factory=TissueParams)
+    artifact: ArtifactParams = field(default_factory=ArtifactParams)
+    fold: FoldParams = field(default_factory=FoldParams)
+    edge: EdgeFilterParams = field(default_factory=EdgeFilterParams)
+    detection: DetectionParams = field(default_factory=DetectionParams)
+    threshold: ThresholdParams = field(default_factory=ThresholdParams)
+    overlay: OverlayParams = field(default_factory=OverlayParams)
+    output: OutputParams = field(default_factory=OutputParams)
+    progress: ProgressParams = field(default_factory=ProgressParams)
+    gui: GuiParams = field(default_factory=GuiParams)
+    alias: AliasParams = field(default_factory=AliasParams)
+    export: dict[str, Any] = field(default_factory=dict)  # defaults for `export`
+    scenes: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    # -- per-scene helpers --------------------------------------------------
+    def scene_override(self, key: str) -> dict[str, Any]:
+        return self.scenes.get(key, {}) or {}
+
+    def scene_skipped(self, key: str) -> bool:
+        return bool(self.scene_override(key).get("skip", False))
+
+    def scene_threshold(self, key: str) -> float | None:
+        v = self.scene_override(key).get("threshold")
+        return float(v) if v is not None else None
+
+    def scene_tissue(self, key: str) -> TissueParams:
+        """`tissue` params with any per-scene ``scenes.<key>.tissue`` overrides applied."""
+        ov = self.scene_override(key).get("tissue")
+        if not ov:
+            return self.tissue
+        from dataclasses import replace
+        return replace(self.tissue,
+                       **{k: v for k, v in ov.items() if hasattr(self.tissue, k)})
+
+
+def _update_dataclass(obj, data: dict[str, Any]) -> None:
+    for k, v in data.items():
+        if hasattr(obj, k):
+            setattr(obj, k, v)
+
+
+def load_config(path: str | Path | None) -> Config:
+    """Load a Config from YAML, or return defaults if *path* is None."""
+    cfg = Config()
+    if path is None:
+        _finalise(cfg)
+        return cfg
+
+    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+
+    for key in ("process_zoom", "tile_size", "overview_max_edge",
+                "overlay_max_edge", "full_debug"):
+        if key in raw:
+            setattr(cfg, key, raw[key])
+
+    if "tissue" in raw and raw["tissue"]:
+        _update_dataclass(cfg.tissue, raw["tissue"])
+    if "artifact" in raw and raw["artifact"]:
+        _update_dataclass(cfg.artifact, raw["artifact"])
+    if "fold" in raw and raw["fold"]:
+        _update_dataclass(cfg.fold, raw["fold"])
+    if "edge" in raw and raw["edge"]:
+        _update_dataclass(cfg.edge, raw["edge"])
+    if "detection" in raw and raw["detection"]:
+        _update_dataclass(cfg.detection, raw["detection"])
+    if "threshold" in raw and raw["threshold"]:
+        _update_dataclass(cfg.threshold, raw["threshold"])
+    if "overlay" in raw and raw["overlay"]:
+        ov = raw["overlay"]
+        if "sabg_color" in ov:
+            cfg.overlay.sabg_color = tuple(ov["sabg_color"])
+        if "color" in ov:                       # back-compat: old single SABG color
+            cfg.overlay.sabg_color = tuple(ov["color"])
+        if "artifact_color" in ov:
+            cfg.overlay.artifact_color = tuple(ov["artifact_color"])
+        if "fold_color" in ov:
+            cfg.overlay.fold_color = tuple(ov["fold_color"])
+        if "edge_color" in ov:
+            cfg.overlay.edge_color = tuple(ov["edge_color"])
+        if "nontissue_color" in ov:
+            cfg.overlay.nontissue_color = tuple(ov["nontissue_color"])
+        # back-compat: a single `alpha:` seeds the per-mask alphas
+        if ov.get("alpha") is not None:
+            a = float(ov["alpha"])
+            cfg.overlay.sabg_alpha = cfg.overlay.artifact_alpha = cfg.overlay.fold_alpha = a
+        if ov.get("sabg_alpha") is not None:
+            cfg.overlay.sabg_alpha = float(ov["sabg_alpha"])
+        if ov.get("artifact_alpha") is not None:
+            cfg.overlay.artifact_alpha = float(ov["artifact_alpha"])
+        if ov.get("fold_alpha") is not None:
+            cfg.overlay.fold_alpha = float(ov["fold_alpha"])
+        if ov.get("fold_show_sabg") is not None:
+            cfg.overlay.fold_show_sabg = bool(ov["fold_show_sabg"])
+        if ov.get("edge_alpha") is not None:
+            cfg.overlay.edge_alpha = float(ov["edge_alpha"])
+        if ov.get("show_edge_rejected") is not None:
+            cfg.overlay.show_edge_rejected = bool(ov["show_edge_rejected"])
+        if ov.get("nontissue_alpha") is not None:
+            cfg.overlay.nontissue_alpha = float(ov["nontissue_alpha"])
+        if ov.get("show_nontissue") is not None:
+            cfg.overlay.show_nontissue = bool(ov["show_nontissue"])
+    if "output" in raw and raw["output"]:
+        _update_dataclass(cfg.output, raw["output"])
+    if "progress" in raw and raw["progress"]:
+        _update_dataclass(cfg.progress, raw["progress"])
+    if "gui" in raw and raw["gui"]:
+        _update_dataclass(cfg.gui, raw["gui"])
+    if "alias" in raw and raw["alias"]:
+        _update_dataclass(cfg.alias, raw["alias"])
+    if "export" in raw and raw["export"]:
+        cfg.export = dict(raw["export"])
+    if "scenes" in raw and raw["scenes"]:
+        cfg.scenes = dict(raw["scenes"])
+
+    _finalise(cfg)
+    return cfg
+
+
+def _finalise(cfg: Config) -> None:
+    """Resolve the stain matrix (rows or None -> default vectors)."""
+    sm = cfg.detection.stain_matrix
+    if sm is None:
+        cfg.detection.stain_matrix = build_stain_matrix()
+    else:
+        arr = np.asarray(sm, dtype=float)
+        if arr.shape == (2, 3):       # only SABG + counter given -> complete it
+            cfg.detection.stain_matrix = build_stain_matrix(arr[0], arr[1])
+        else:
+            cfg.detection.stain_matrix = arr

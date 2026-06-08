@@ -1,0 +1,8 @@
+# Analysis outputs live OUTSIDE this repo (../outputs), so they are not tracked.
+# Kept here in case anyone points --out back inside main/.
+outputs/
+config.yaml
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/
