@@ -117,7 +117,7 @@ edge:
   reject_shadow: true
   shadow_dark_level: 0.60  # brightness (0-1) below this = dark
   shadow_sat_min: 0.10     # saturation below this = achromatic (near-grey)
-  teal_keep: 0.06          # protect clearly-teal positives (opponent >= this) from BOTH
+  teal_keep: 0.09          # protect clearly-teal positives (opponent >= this) from BOTH
                            # filters, so faint teal is kept while achromatic cell edges
                            # (opponent ~ 0) are still removed. 0 = off. Lower = protect
                            # fainter teal (but risk keeping more edge); raise = stricter.
@@ -136,7 +136,11 @@ detection:
 
   # Grow the final SABG+ mask by this many px (after the edge filter) to recover
   # faint staining trimmed by a conservative threshold. 0 = off.
-  expand_px: 1
+  expand_px: 2
+  # ...but only grow into pixels at least this teal (opponent score), so the dilation
+  # follows real teal rather than bleeding into achromatic cell edges / blank tissue.
+  # 0 = grow into any tissue (old behaviour).
+  expand_teal_min: 0.04
 
   # Color-deconvolution stain vectors in RGB optical-density space.
   # Row 0 = SABG (teal/cyan), row 1 = tissue counterstain, row 2 = residual.
@@ -156,7 +160,7 @@ threshold:
   percentile: 99.0     # used when method == percentile
   value: null          # used when method == fixed
   min_score: 0.0       # never threshold below this (guardrail against noise)
-  scale: 0.80          # multiply the auto threshold (<1 = more sensitive; 1 = off)
+  scale: 0.75          # multiply the auto threshold (<1 = more sensitive; 1 = off)
   # SPEED: derive the threshold from the in-memory overview and SKIP the full-res
   # pass 1 (~2x faster). The threshold can shift slightly (the sparse signal tail
   # is thinner when downsampled), so it's off by default; turn on for quick looks.

@@ -367,6 +367,13 @@ def _qc_masks(crop_rgb, conv, cfg, thr, thr_s, um_per_px=None):
         pos &= (s_s >= thr_s)
     if cfg.edge.enabled:
         pos, _ = refine_positive(pos, crop_rgb, um_per_px, cfg.edge)
+    ep = max(0, int(cfg.detection.expand_px))      # match analyze: teal-gated growth
+    if ep and pos.any():
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * ep + 1, 2 * ep + 1))
+        grown = cv2.dilate(pos.astype(np.uint8), k).astype(bool) & raw_t & ~art
+        if cfg.detection.expand_teal_min > 0:
+            grown &= pos | (opp >= cfg.detection.expand_teal_min)
+        pos = grown
     return pos, art
 
 

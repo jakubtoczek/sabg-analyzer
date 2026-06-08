@@ -26,7 +26,10 @@ class DetectionParams:
     stain_matrix: np.ndarray | None = None  # 3x3, rows = SABG/counter/residual
     auto_estimate: bool = False
     require_agreement: bool = True          # SABG+ only where BOTH scores fire
-    expand_px: int = 1                      # dilate the final positive mask by this many px
+    expand_px: int = 2                      # dilate the final positive mask by this many px
+    expand_teal_min: float = 0.04           # only grow into pixels this teal (opponent);
+                                            # keeps growth on real teal, not edges/tissue.
+                                            # 0 = grow into any tissue (old behaviour)
 
 
 @dataclass

@@ -37,7 +37,7 @@ class EdgeFilterParams:
     # when faint, while cell-edge false positives are achromatic (opponent ~ 0). A
     # positive pixel whose opponent score >= teal_keep is kept regardless of shape /
     # darkness, so faint teal is no longer stripped as an "edge". 0 = old behaviour.
-    teal_keep: float = 0.06
+    teal_keep: float = 0.09
 
 
 def refine_positive(pos: np.ndarray, rgb: np.ndarray, um_per_px: float | None,

@@ -275,6 +275,7 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
     edge_on = cfg.edge.enabled
     px_um_proc = (scene.pixel_size_um / z) if scene.pixel_size_um else None
     expand_px = max(0, int(cfg.detection.expand_px))
+    expand_teal_min = cfg.detection.expand_teal_min
     expand_k = (cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE, (2 * expand_px + 1, 2 * expand_px + 1))
         if expand_px else None)
@@ -320,8 +321,11 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
                     edge_px += int(removed.sum())
                     _project(ov_edge, removed, ox, oy, tw, th, scale)
                     _project(hd_edge, removed, ox, oy, tw, th, hd_scale)
-            if expand_k is not None and pos.any():   # grow kept positives (balances low detection)
-                pos = cv2.dilate(pos.astype(np.uint8), expand_k).astype(bool) & t
+            if expand_k is not None and pos.any():   # grow kept positives into nearby teal
+                grown = cv2.dilate(pos.astype(np.uint8), expand_k).astype(bool) & t
+                if expand_teal_min > 0:               # don't grow into achromatic edges/tissue
+                    grown &= pos | (opp >= expand_teal_min)
+                pos = grown
             tissue_px += int(t.sum())
             positive_px += int(pos.sum())
             if pos.any():
@@ -616,7 +620,8 @@ def _write_config_snapshot(path: Path, cfg: Config, rows: list[dict]) -> None:
         "detection": {"primary": cfg.detection.primary,
                       "auto_estimate": cfg.detection.auto_estimate,
                       "require_agreement": cfg.detection.require_agreement,
-                      "expand_px": cfg.detection.expand_px},
+                      "expand_px": cfg.detection.expand_px,
+                      "expand_teal_min": cfg.detection.expand_teal_min},
         "threshold": {"method": cfg.threshold.method,
                       "percentile": cfg.threshold.percentile,
                       "min_score": cfg.threshold.min_score,

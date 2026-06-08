@@ -21,7 +21,7 @@ class ThresholdParams:
     percentile: float = 99.0
     value: float | None = None
     min_score: float = 0.0
-    scale: float = 0.80        # multiply the auto threshold (<1 = more sensitive)
+    scale: float = 0.75        # multiply the auto threshold (<1 = more sensitive)
     from_overview: bool = False  # derive threshold from the in-memory overview
     #   instead of streaming full-res pass 1 (~2x faster; threshold may shift
     #   slightly because the sparse tail is thinner when downsampled).
