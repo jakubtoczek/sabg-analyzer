@@ -142,7 +142,8 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
 
     # --- overview + tissue region -----------------------------------------
     ov_rgb, scale = czi_io.read_overview(
-        doc, scene, cfg.overview_max_edge, zoom_cap=z)
+        doc, scene, max_edge=cfg.overview_max_edge, zoom_cap=z,
+        um_per_px=cfg.overview_um_per_px)
     from .tissue import (artifact_mask, clean_tissue_mask, erode_mask,
                          estimate_background, segment_tissue, tissue_mask)
     tcfg = cfg.scene_tissue(scene.key)   # tissue params (+ any per-scene overrides)
@@ -156,7 +157,8 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
 
     # higher-res canvas for overlays + maps (decoupled from the gating overview).
     hd_rgb, hd_scale = czi_io.read_overview(
-        doc, scene, cfg.overlay_max_edge, zoom_cap=z)
+        doc, scene, max_edge=cfg.maps_max_edge, zoom_cap=z,
+        um_per_px=cfg.maps_um_per_px)
     Hh, Wh = hd_rgb.shape[:2]
 
     # stain matrix (optionally auto-estimated from this scene)
@@ -566,8 +568,10 @@ def _write_config_snapshot(path: Path, cfg: Config, rows: list[dict]) -> None:
     snapshot = {
         "process_zoom": cfg.process_zoom,
         "tile_size": cfg.tile_size,
+        "overview_um_per_px": cfg.overview_um_per_px,
         "overview_max_edge": cfg.overview_max_edge,
-        "overlay_max_edge": cfg.overlay_max_edge,
+        "maps_um_per_px": cfg.maps_um_per_px,
+        "maps_max_edge": cfg.maps_max_edge,
         "tissue": {"gap_level": cfg.tissue.gap_level,
                    "white_level": cfg.tissue.white_level,
                    "sat_min": cfg.tissue.sat_min,
@@ -592,7 +596,8 @@ def _write_config_snapshot(path: Path, cfg: Config, rows: list[dict]) -> None:
                  "min_width_um": cfg.edge.min_width_um,
                  "reject_shadow": cfg.edge.reject_shadow,
                  "shadow_dark_level": cfg.edge.shadow_dark_level,
-                 "shadow_sat_min": cfg.edge.shadow_sat_min},
+                 "shadow_sat_min": cfg.edge.shadow_sat_min,
+                 "teal_keep": cfg.edge.teal_keep},
         "fold": {"enabled": cfg.fold.enabled,
                  "source": cfg.fold.source,
                  "hp_um": cfg.fold.hp_um,

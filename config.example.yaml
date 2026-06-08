@@ -14,17 +14,21 @@ process_zoom: 1.0
 # Full-resolution tile size (px) used to stream each large scene through RAM.
 tile_size: 4096
 
-# Long edge (px) of the downscaled overview canvas used for tissue gating,
-# the score histogram, and the 6-panel debug figure.
-overview_max_edge: 1400
+# Downscaled canvases are sized by MAGNIFICATION (µm/px) so they're proportional to
+# each section's physical size (not an absolute px cap), each bounded by a px safety
+# cap so a huge slide can't blow up memory. Quantification is always full-res, so
+# these never affect the reported %SABG (only the QC/overlay/selection detail).
 
-# Long edge (px) of the HIGHER-resolution canvas used for the saved overlays and
-# the maps consumed by `export`. Decoupled from overview_max_edge so QC overlays
-# can be detailed without slowing the histogram/gating pass. ~4000 keeps the
-# punctate signal verifiable; raise (e.g. 6000-8000) for more detail at the cost
-# of larger files / a bit more time. Capped at full resolution (process_zoom);
-# quantification is always full-res, so this never affects the reported %SABG.
-overlay_max_edge: 4000
+# Gating overview: tissue segmentation, score histogram, fold detection. Keep it
+# fairly fine (~7 µm/px) so thin folds (min width ~80 µm) stay detectable.
+overview_um_per_px: 7.0
+overview_max_edge: 2500   # safety cap (px)
+
+# Maps canvas = the saved overlay masks + the FOV-selection canvas. Set equal to
+# export.section_um_per_px so the section-overlay masks are 1:1 (no upscale). Lower
+# (finer) for crisper whole-section overlays at more RAM; raise for smaller maps.
+maps_um_per_px: 3.0
+maps_max_edge: 6000       # safety cap (px)
 
 # Also write the large standalone debug heatmaps (tissue/score/mask) per scene.
 # They are redundant with the *_compare.jpg panel and ~10x the disk, so off by
@@ -113,6 +117,10 @@ edge:
   reject_shadow: true
   shadow_dark_level: 0.60  # brightness (0-1) below this = dark
   shadow_sat_min: 0.10     # saturation below this = achromatic (near-grey)
+  teal_keep: 0.06          # protect clearly-teal positives (opponent >= this) from BOTH
+                           # filters, so faint teal is kept while achromatic cell edges
+                           # (opponent ~ 0) are still removed. 0 = off. Lower = protect
+                           # fainter teal (but risk keeping more edge); raise = stricter.
 
 # ---- SABG detection --------------------------------------------------------
 detection:
@@ -148,7 +156,7 @@ threshold:
   percentile: 99.0     # used when method == percentile
   value: null          # used when method == fixed
   min_score: 0.0       # never threshold below this (guardrail against noise)
-  scale: 0.85          # multiply the auto threshold (<1 = more sensitive; 1 = off)
+  scale: 0.80          # multiply the auto threshold (<1 = more sensitive; 1 = off)
   # SPEED: derive the threshold from the in-memory overview and SKIP the full-res
   # pass 1 (~2x faster). The threshold can shift slightly (the sparse signal tail
   # is thinner when downsampled), so it's off by default; turn on for quick looks.
@@ -250,7 +258,8 @@ export:
   section_figures: true
   sec_variants: [raw, wb_scalebar, wb_overlay_fov_scalebar]
   sec_formats: [jpg]
-  section_um_per_px: 1.5   # section-figure resolution (µm/px); smaller = bigger image
+  section_um_per_px: 3.0   # section-figure resolution (µm/px); match maps_um_per_px for
+                           # 1:1 overlay masks; smaller = bigger/crisper image (more RAM)
   section_show_edge: false # draw the blue edge-rejected pixels on section figures
   # Section scale bar (the `scalebar` token). Default ON + labelled, ~1 mm, adaptive
   # (snaps to a nice length near the target, <=~40% of the figure width).

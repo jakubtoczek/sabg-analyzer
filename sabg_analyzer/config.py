@@ -94,8 +94,12 @@ class AliasParams:
 class Config:
     process_zoom: float = 1.0
     tile_size: int = 4096
-    overview_max_edge: int = 1400      # gating/histogram/debug overview
-    overlay_max_edge: int = 4000       # higher-res canvas for overlays + maps
+    # Canvases are sized by magnification (µm/px) so they're proportional to each
+    # section's physical size, each bounded by a px safety cap (huge slides).
+    overview_um_per_px: float = 7.0    # gating/histogram/fold-detection overview
+    overview_max_edge: int = 2500      # safety cap (px) for the gating overview
+    maps_um_per_px: float = 3.0        # maps canvas (saved masks + FOV selection)
+    maps_max_edge: int = 6000          # safety cap (px) for the maps canvas
     full_debug: bool = False
     tissue: TissueParams = field(default_factory=TissueParams)
     artifact: ArtifactParams = field(default_factory=ArtifactParams)
@@ -147,8 +151,9 @@ def load_config(path: str | Path | None) -> Config:
 
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
 
-    for key in ("process_zoom", "tile_size", "overview_max_edge",
-                "overlay_max_edge", "full_debug"):
+    for key in ("process_zoom", "tile_size", "overview_um_per_px",
+                "overview_max_edge", "maps_um_per_px", "maps_max_edge",
+                "full_debug"):
         if key in raw:
             setattr(cfg, key, raw[key])
 

@@ -153,14 +153,23 @@ def iter_tiles(
 
 
 def read_overview(
-    doc, scene: SceneInfo, max_edge: int, zoom_cap: float = 1.0
+    doc, scene: SceneInfo, max_edge: int | None = None, zoom_cap: float = 1.0,
+    um_per_px: float | None = None,
 ) -> tuple[np.ndarray, float]:
     """Read a whole scene downscaled for display/QC.
 
+    Sizing is by **magnification** (*um_per_px*, a fixed physical resolution so the
+    canvas is proportional to the section's physical size), bounded by an optional
+    *max_edge* px safety cap and never upscaled past *zoom_cap* (full res).
     Returns ``(rgb, scale)`` where ``scale`` is overview-px per full-res-px.
     """
     long_edge = max(scene.w, scene.h)
-    scale = min(zoom_cap, max_edge / long_edge) if long_edge else zoom_cap
+    scale = zoom_cap
+    if um_per_px and scene.pixel_size_um:
+        scale = min(scale, scene.pixel_size_um / um_per_px)
+    if max_edge and long_edge:
+        scale = min(scale, max_edge / long_edge)
+    scale = min(scale, 1.0)                       # never upscale
     rgb = read_region(doc, scene.x, scene.y, scene.w, scene.h, scale)
     return rgb, scale
 

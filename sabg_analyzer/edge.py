@@ -33,6 +33,11 @@ class EdgeFilterParams:
     reject_shadow: bool = True       # drop dark + achromatic (near-grey) positives
     shadow_dark_level: float = 0.60  # brightness (0-1) below this = dark
     shadow_sat_min: float = 0.10     # saturation below this = achromatic (near-grey)
+    # Protect clearly-TEAL positives from BOTH edge filters: real SABG is teal even
+    # when faint, while cell-edge false positives are achromatic (opponent ~ 0). A
+    # positive pixel whose opponent score >= teal_keep is kept regardless of shape /
+    # darkness, so faint teal is no longer stripped as an "edge". 0 = old behaviour.
+    teal_keep: float = 0.06
 
 
 def refine_positive(pos: np.ndarray, rgb: np.ndarray, um_per_px: float | None,
@@ -43,6 +48,14 @@ def refine_positive(pos: np.ndarray, rgb: np.ndarray, um_per_px: float | None,
     """
     if not p.enabled or not pos.any():
         return pos, np.zeros_like(pos)
+
+    # Clearly-teal positives are real SABG regardless of shape/darkness; exempt them
+    # from the edge filters so faint teal is not removed as an "edge". Cell-edge
+    # false positives are achromatic (opponent ~ 0) and stay subject to filtering.
+    protect = None
+    if p.teal_keep and p.teal_keep > 0:
+        from .scoring import opponent_score
+        protect = pos & (opponent_score(rgb) >= p.teal_keep)
 
     kept = pos.copy()
 
@@ -59,5 +72,8 @@ def refine_positive(pos: np.ndarray, rgb: np.ndarray, um_per_px: float | None,
         sat = np.where(maxc > 0, (maxc - minc) / np.maximum(maxc, 1e-6), 0.0)
         is_shadow = (maxc < p.shadow_dark_level) & (sat < p.shadow_sat_min)
         kept = kept & ~is_shadow
+
+    if protect is not None:           # restore protected teal positives
+        kept |= protect
 
     return kept, pos & ~kept

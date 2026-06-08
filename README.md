@@ -225,7 +225,8 @@ Key knobs (`config.example.yaml` documents them all):
 | `alias.fields` / `optional` / `spacer` / `tag_field` | How the section alias (results + filenames) is built from `sections.csv`. Default `animal_group`, `tissue` to disambiguate. |
 | `progress.section` / `total` / `elapsed` / `eta` / `checkpoints` | What the live progress line shows; `checkpoints` (e.g. `[50]`) leaves a persistent mark at those per-section %. |
 | `output.run_log` / `run_log_name` | Tee console output to a timestamped log file in the output folder (on by default). |
-| `overlay_max_edge` | Long edge (px) of saved overlays + maps. ~4000; raise (6000–8000) for sharper QC. Capped at full res; never affects %SABG. |
+| `maps_um_per_px` / `maps_max_edge` | Maps/overlay canvas resolution as a magnification (µm/px, default 3 = match `section_um_per_px`) + a px safety cap. Lower µm/px = crisper overlays, more RAM. Never affects %SABG. |
+| `overview_um_per_px` / `overview_max_edge` | Gating/fold-detection overview resolution (µm/px, default 7) + px safety cap. |
 | `overlay.sabg_color` / `sabg_alpha` | SABG⁺ highlight colour + blend (default green, 0.60). |
 | `overlay.artifact_color` / `artifact_alpha` | Artifact highlight colour + blend (default red, 0.60). |
 | `output.debug` / `maps` | Toggle which image outputs `analyze` writes (keep `maps` on for `export`). |

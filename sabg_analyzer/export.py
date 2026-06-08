@@ -66,7 +66,7 @@ class ExportParams:
     section_figures: bool = True
     sec_variants: tuple[str, ...] = ("raw", "wb_scalebar", "wb_overlay_fov_scalebar")
     sec_formats: tuple[str, ...] = ("jpg",)
-    section_um_per_px: float = 1.5  # section figure resolution (fixed magnification)
+    section_um_per_px: float = 3.0  # section figure resolution (match maps_um_per_px)
     section_show_edge: bool = False  # draw blue edge-rejected pixels on section figures
     # Section scale bar (the `scalebar` variant token). Default ON + labelled, ~1 mm,
     # adaptive (snaps to a nice length near the target, <=~40% of the figure width).
