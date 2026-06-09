@@ -57,6 +57,9 @@ tissue:
   close_px: 3          # morphological close to solidify textured tissue (overview only)
   fill_holes_max_frac: 0.0012  # fill enclosed non-tissue holes up to this frame fraction (de-speckle)
   bg_max_tissue_frac: 0.97     # if adaptive keeps more than this, retry with a stricter glass estimate
+  fill_interior_holes: false   # reclaim faint interior tissue dropped as glass: fill enclosed holes
+                               # unless they look like bright glass / uniform bg-colour / mosaic gap
+  interior_hole_max_frac: 0.02 # upper guard: never fill an interior hole bigger than this frame fraction
 # Per-scene tissue overrides go under scenes.<file:idx>.tissue (see the `scenes` block).
 
 # ---- Artifact rejection (folds / debris / edge halos) ----------------------

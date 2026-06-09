@@ -46,6 +46,12 @@ class TissueParams:
     close_px: int = 3               # morphological close to solidify textured tissue (overview)
     fill_holes_max_frac: float = 0.0012  # fill enclosed non-tissue holes up to this frame fraction
     bg_max_tissue_frac: float = 0.97  # if adaptive keeps more than this, retry with a stricter bg
+    # Reclaim faint interior tissue wrongly dropped as glass (enclosed holes inside the
+    # tissue blob). A hole is FILLED regardless of size UNLESS it looks like genuine glass
+    # (bright low-sat, or uniformly bg-coloured + non-teal + smooth) or a black mosaic gap.
+    fill_interior_holes: bool = False
+    interior_hole_max_frac: float = 0.02  # upper guard: never fill a hole bigger than this
+                                          # frame fraction (protects large enclosed glass)
 
 
 @dataclass
@@ -199,12 +205,69 @@ def _fill_small_holes(m: np.ndarray, max_px: int) -> np.ndarray:
     return m
 
 
+def _fill_interior_holes_guarded(m: np.ndarray, rgb: np.ndarray,
+                                 bg: np.ndarray | None, p: TissueParams) -> np.ndarray:
+    """Reclaim faint interior tissue that the glass tests wrongly dropped.
+
+    Faint near-glass tissue gets classified as glass by the *adaptive* test and
+    becomes an enclosed hole inside the tissue blob. This fills such holes
+    regardless of size, leaving open only those that look like something we must
+    NOT count: per pixel a hole is "kept open" when it is
+
+      (a) a black mosaic gap (unsampled), or
+      (b) bright low-saturation glass (the fixed white test), or
+      (c) uniformly glass-coloured: close to the estimated bg, non-teal, and very
+          smooth (a STRICTER version of the per-pixel adaptive test, so genuinely
+          uniform glass stays open while slightly-textured faint tissue is filled).
+
+    A hole is filled only if fewer than half its pixels are kept-open and it is no
+    larger than ``interior_hole_max_frac`` of the frame (an upper guard against
+    re-absorbing large enclosed glass lakes). Border-touching holes (the exterior
+    glass margin) are never filled.
+    """
+    m = m.astype(np.uint8)
+    H, W = m.shape
+    rgb_i = rgb.astype(np.int16)
+    maxc = rgb_i.max(axis=2)
+    minc = rgb_i.min(axis=2)
+    bright = maxc / 255.0
+    sat = np.where(maxc > 0, (maxc - minc) / np.maximum(maxc, 1), 0.0)
+    keep_open = (maxc <= p.gap_level) | ((bright >= p.white_level) & (sat <= p.sat_min))
+    if p.adaptive and bg is not None:
+        from .scoring import opponent_score
+        a = rgb.astype(np.float32) / 255.0
+        dist = np.sqrt(((a - bg.reshape(1, 1, 3)) ** 2).sum(axis=2))
+        unstained = opponent_score(rgb) < p.bg_teal_guard
+        w = max(3, int(p.texture_win) | 1)
+        g = a.mean(axis=2)
+        mb = cv2.blur(g, (w, w))
+        lstd = np.sqrt(np.clip(cv2.blur(g * g, (w, w)) - mb * mb, 0.0, None))
+        glass_strict = ((dist <= 0.6 * p.bg_margin) & unstained
+                        & (lstd < 0.6 * p.texture_min))
+        keep_open = keep_open | glass_strict
+
+    max_px = (int(p.interior_hole_max_frac * m.size)
+              if p.interior_hole_max_frac > 0 else m.size)
+    n, lab, st, _ = cv2.connectedComponentsWithStats((1 - m).astype(np.uint8), 8)
+    for i in range(1, n):
+        x, y, w, h, area = st[i]
+        if x == 0 or y == 0 or x + w == W or y + h == H:
+            continue                                  # exterior glass margin
+        if area > max_px:
+            continue                                  # too large: likely real glass
+        comp = (lab == i)
+        if float(keep_open[comp].mean()) < 0.5:       # predominantly tissue -> reclaim
+            m[comp] = 1
+    return m.astype(bool)
+
+
 def segment_tissue(rgb: np.ndarray, p: TissueParams) -> np.ndarray:
     """Full overview tissue mask: estimate background, classify, clean, with an
     anti-collapse retry (if the adaptive pass keeps almost everything, the glass
     colour estimate was unreliable, so retry from the brightest pixels only)."""
     bg = estimate_background(rgb, p)
     m = clean_tissue_mask(tissue_mask(rgb, p, bg), p)
+    use_p, use_bg = p, bg
     if p.adaptive and bg is not None:
         frame = rgb.astype(np.int16).max(axis=2) > p.gap_level
         if frame.any() and float(m[frame].mean()) > p.bg_max_tissue_frac:
@@ -213,4 +276,7 @@ def segment_tissue(rgb: np.ndarray, p: TissueParams) -> np.ndarray:
             bg2 = estimate_background(rgb, strict)
             if bg2 is not None:
                 m = clean_tissue_mask(tissue_mask(rgb, strict, bg2), strict)
+                use_p, use_bg = strict, bg2
+    if p.fill_interior_holes:   # reclaim faint interior tissue dropped as glass
+        m = _fill_interior_holes_guarded(m, rgb, use_bg, use_p)
     return m
