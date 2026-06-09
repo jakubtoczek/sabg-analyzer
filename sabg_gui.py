@@ -106,7 +106,8 @@ class App:
         right.pack(side="right")
 
         for name, cmd in (("Scan", self.on_scan), ("Info", self.on_info),
-                          ("Analyze", self.on_analyze), ("Export", self.on_export)):
+                          ("Analyze", self.on_analyze), ("Export", self.on_export),
+                          ("Preview", self.on_preview)):
             b = tk.Button(left, text=name, width=9, command=cmd)
             b.pack(side="left", padx=3, pady=4)
             self.btn[name] = b
@@ -314,6 +315,25 @@ class App:
             else:
                 cfg.write_text("# SABG Analyzer config\n", encoding="utf-8")
         self._open(cfg)
+
+    def on_preview(self) -> None:
+        """Open the in-process Preview/Tune window (live tuning on a ROI)."""
+        out = Path(self.out_var.get())
+        out.mkdir(parents=True, exist_ok=True)
+        cfg = out / "config.yaml"
+        if not cfg.exists() and EXAMPLE_CFG.exists():
+            shutil.copyfile(EXAMPLE_CFG, cfg)
+            self._log(f"[gui] created {cfg} from config.example.yaml")
+        try:
+            from sabg_preview_gui import PreviewWindow
+            PreviewWindow(self.root, self.data_var.get(), str(out), str(cfg))
+            self._log("[gui] opened Preview/Tune window")
+        except Exception as exc:
+            messagebox.showerror(
+                "Preview unavailable",
+                f"Could not open the preview window:\n{exc}\n\n"
+                "It needs matplotlib (see requirements.txt).")
+            self._log(f"[gui] preview error: {exc}")
 
     def on_help(self) -> None:
         self._open(README)

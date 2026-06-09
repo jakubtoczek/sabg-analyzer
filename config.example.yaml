@@ -236,6 +236,8 @@ progress:
 gui:
   # What the Info button opens. Any of: sections, labels, thumbs.
   info_opens: [sections, labels]
+  preview_roi_cap_um: 1000.0  # Preview/Tune: max ROI side when drawing (default 2x fov_um)
+  preview_hi_res: false       # open the selected thumb at higher resolution by default
 
 # ---- Section alias (used in results.csv + every output filename) ----------
 # Each section gets a short, human-readable id built from the sections.csv

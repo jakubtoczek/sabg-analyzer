@@ -24,6 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import cv2
 import numpy as np
 import yaml
 
@@ -164,6 +165,31 @@ def roi_threshold(rgb: np.ndarray, t: np.ndarray, conv: np.ndarray, cfg: Config,
     return thr, thr_s
 
 
+def _roi_fold_band(rgb: np.ndarray, region: np.ndarray,
+                   pixel_size_um: float | None, cfg: Config) -> np.ndarray:
+    """Fold band for the ROI, detected at a coarse resolution then upsampled.
+
+    The pipeline detects folds on the gating overview (``overview_um_per_px``) and
+    upsamples the band to the full-res tiles; doing the same here keeps the fold
+    parameters (all in µm) behaving as in analysis and keeps the skimage ridge
+    detection fast (it is run on a small array, never the full-res ROI).
+    """
+    H, W = region.shape
+    fold_um = cfg.overview_um_per_px
+    if pixel_size_um and fold_um and pixel_size_um < fold_um:
+        fscale = pixel_size_um / fold_um
+        sw, sh = max(1, int(round(W * fscale))), max(1, int(round(H * fscale)))
+        small = cv2.resize(rgb, (sw, sh), interpolation=cv2.INTER_AREA)
+        small_region = cv2.resize(region.astype(np.uint8), (sw, sh),
+                                  interpolation=cv2.INTER_NEAREST).astype(bool)
+        signal = fold_density_map(small, small_region, fold_um, cfg.fold)
+        band = detect_folds(signal, fold_um, small_region, cfg.fold)
+        return cv2.resize(band.astype(np.uint8), (W, H),
+                          interpolation=cv2.INTER_NEAREST).astype(bool)
+    signal = fold_density_map(rgb, region, pixel_size_um, cfg.fold)
+    return detect_folds(signal, pixel_size_um, region, cfg.fold)
+
+
 def compute_roi_layers(rgb: np.ndarray, cfg: Config, pixel_size_um: float | None,
                        manual_thr: float | None = None) -> dict:
     """Compute every overlay layer for one full-res RGB ROI.
@@ -182,8 +208,7 @@ def compute_roi_layers(rgb: np.ndarray, cfg: Config, pixel_size_um: float | None
 
     fold_band = None
     if cfg.fold.enabled:
-        signal = fold_density_map(rgb, region, pixel_size_um, cfg.fold)
-        fold_band = detect_folds(signal, pixel_size_um, region, cfg.fold)
+        fold_band = _roi_fold_band(rgb, region, pixel_size_um, cfg)
         if cfg.fold.exclude_from_tissue:
             region_c = region_c & ~fold_band
 
