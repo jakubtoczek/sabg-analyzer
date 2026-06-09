@@ -33,6 +33,7 @@ from matplotlib.figure import Figure
 from matplotlib.widgets import RectangleSelector
 
 import sabg_gui_widgets as gw
+from sabg_gui_widgets import CanvasNav      # shared mouse-only canvas navigation
 from sabg_analyzer import overlay, preview, whitebalance
 from sabg_analyzer.config import load_config
 
@@ -40,61 +41,6 @@ _VIEW_MULTS = [1, 2, 4, 8]          # thumb-resolution multipliers for the px/µ
 # Scale-bar corner labels (clear) -> the export.draw_scalebar position codes.
 _SB_POS = {"bottom-right": "br", "bottom-left": "bl",
            "top-right": "tr", "top-left": "tl"}
-
-
-# ---------------------------------------------------------------------------
-# mouse-only canvas navigation (replaces NavigationToolbar2Tk)
-# ---------------------------------------------------------------------------
-class CanvasNav:
-    """Wheel-zoom-to-cursor + middle/right-drag pan on one matplotlib axes."""
-
-    def __init__(self, canvas: FigureCanvasTkAgg, ax) -> None:
-        self.canvas = canvas
-        self.ax = ax
-        self._home: tuple | None = None
-        self._panning = False
-        canvas.mpl_connect("scroll_event", self._zoom)
-        canvas.mpl_connect("button_press_event", self._press)
-        canvas.mpl_connect("motion_notify_event", self._drag)
-        canvas.mpl_connect("button_release_event", self._release)
-
-    def set_home(self) -> None:
-        self._home = (self.ax.get_xlim(), self.ax.get_ylim())
-
-    def clear_home(self) -> None:
-        self._home = None
-
-    def reset(self) -> None:
-        if self._home is not None:
-            self.ax.set_xlim(*self._home[0])
-            self.ax.set_ylim(*self._home[1])
-            self.canvas.draw_idle()
-
-    def _zoom(self, e) -> None:
-        if e.inaxes is not self.ax or e.xdata is None:
-            return
-        scale = 0.8 if e.button == "up" else 1.25      # wheel up = zoom in
-        x0, x1 = self.ax.get_xlim()
-        y0, y1 = self.ax.get_ylim()
-        xd, yd = e.xdata, e.ydata
-        self.ax.set_xlim(xd - (xd - x0) * scale, xd + (x1 - xd) * scale)
-        self.ax.set_ylim(yd - (yd - y0) * scale, yd + (y1 - yd) * scale)
-        self.canvas.draw_idle()
-
-    def _press(self, e) -> None:
-        if e.button in (2, 3) and e.inaxes is self.ax:
-            self.ax.start_pan(e.x, e.y, 1)             # button 1 => plain pan
-            self._panning = True
-
-    def _drag(self, e) -> None:
-        if self._panning:
-            self.ax.drag_pan(1, e.key, e.x, e.y)
-            self.canvas.draw_idle()
-
-    def _release(self, e) -> None:
-        if self._panning:
-            self.ax.end_pan()
-            self._panning = False
 
 
 class _GuiProgress:

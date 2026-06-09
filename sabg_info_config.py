@@ -24,9 +24,22 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+import cv2
+import numpy as np
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
+
 import sabg_gui_widgets as gw
 from sabg_analyzer import metadata, preview
 from sabg_analyzer.config import load_config
+
+
+def _read_rgb(path) -> np.ndarray | None:
+    """Read an image as RGB uint8, or None if it can't be read."""
+    if path is None:
+        return None
+    bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    return None if bgr is None else cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
 
 def _open_file(path: Path) -> None:
@@ -47,18 +60,28 @@ _EDIT_COLS = ["analyze", "animal", "group", "tissue", "treatment", "day", "tag"]
 class InfoWindow(tk.Toplevel):
     def __init__(self, master, data_dir: str, out_dir: str, config_path: str) -> None:
         super().__init__(master)
-        self.title("SABG Info — sections.csv")
-        self.geometry("1100x720")
-        self.minsize(820, 520)
-
+        self.title("SABG Info — labels & sections.csv")
+        self.geometry("1320x780")
+        self.minsize(1000, 580)
         self.data_dir = data_dir
         self.out_dir = Path(out_dir)
+        self.config_path = config_path
         self.csv_path = self.out_dir / "sections.csv"
-        self.cfg = load_config(config_path if Path(config_path).exists() else None)
+        self._build()
 
+    def _build(self) -> None:
+        for w in list(self.children.values()):
+            w.destroy()
+        self.cfg = load_config(
+            self.config_path if Path(self.config_path).exists() else None)
         self._photo_refs: list[tk.PhotoImage] = []
         self.cell_vars: dict[tuple[int, str], tk.Variable] = {}
         self._row_anchor: dict[tuple[str, str], tk.Widget] = {}
+        self.entries: list = []
+        self.cur_idx = 0
+        self._raw = {"label": None, "thumb": None}   # raw RGB per viewer tab
+        self._rot = {"label": 0, "thumb": 0}          # 90° rotations per tab
+        self.figs = {}; self.axes = {}; self.canvases = {}; self.navs = {}
 
         if not self.csv_path.exists():
             tk.Label(self, text=f"No sections.csv in\n{self.out_dir}\n\nRun Scan first.",
@@ -68,40 +91,137 @@ class InfoWindow(tk.Toplevel):
         for col in _RO_COLS + _EDIT_COLS:            # tolerate older/short headers
             if col not in self.df.columns:
                 self.df[col] = ""
-
         self._build_layout()
 
     def _build_layout(self) -> None:
-        # left: thumbnail picker | right: table editor + buttons
-        left = tk.Frame(self, width=200)
+        # left: picker | centre: label/thumb viewer | right: big table editor
+        left = tk.Frame(self, width=168)
         left.pack(side="left", fill="y")
         left.pack_propagate(False)
         tk.Label(left, text="Sections", font=("Segoe UI", 9, "bold")).pack(pady=(6, 2))
         pick = gw.ScrollFrame(left)
         pick.pack(fill="both", expand=True)
         try:
-            entries = preview.list_sections(self.data_dir, self.out_dir, self.cfg)
-            gw.thumbnail_picker(pick.interior, entries, self._focus_section,
+            self.entries = preview.list_sections(self.data_dir, self.out_dir, self.cfg)
+            gw.thumbnail_picker(pick.interior, self.entries, self._on_pick,
                                 self._photo_refs)
         except Exception as exc:
             tk.Label(pick.interior, text=f"(picker error: {exc})",
-                     wraplength=170, fg="red").pack()
+                     wraplength=160, fg="red").pack()
 
-        right = tk.Frame(self)
-        right.pack(side="left", fill="both", expand=True)
+        right = tk.Frame(self, width=600)
+        right.pack(side="right", fill="y")
+        right.pack_propagate(False)
         btns = tk.Frame(right, padx=6, pady=6)
         btns.pack(fill="x")
         tk.Button(btns, text="💾  Save sections.csv", font=("Segoe UI", 9, "bold"),
                   command=self.on_save).pack(side="left")
-        tk.Button(btns, text="Open sections.csv", command=lambda: _open_file(self.csv_path)).pack(side="left", padx=6)
+        tk.Button(btns, text="Open", command=lambda: _open_file(self.csv_path)).pack(side="left", padx=6)
         tk.Button(btns, text="Reload", command=self._reload).pack(side="left")
+        tk.Button(btns, text="?", width=2, command=self._show_help).pack(side="right")
         tk.Label(right, text="Tick 'analyze' to include a section; fill the identity "
-                 "columns the alias is built from.", fg="#666",
-                 font=("Segoe UI", 8)).pack(fill="x", padx=8)
-
+                 "columns the alias is built from.", fg="#666", justify="left",
+                 wraplength=580, font=("Segoe UI", 8)).pack(fill="x", padx=8)
         self.table = gw.ScrollFrame(right)
         self.table.pack(fill="both", expand=True)
         self._build_table(self.table.interior)
+
+        center = tk.Frame(self)
+        center.pack(side="left", fill="both", expand=True)
+        self._build_viewer(center)
+        if self.entries:
+            self._show_section(0)
+
+    # -- label / thumb viewer ----------------------------------------------
+    def _build_viewer(self, center: tk.Frame) -> None:
+        bar = tk.Frame(center)
+        bar.pack(fill="x")
+        tk.Button(bar, text="◀ prev", command=lambda: self._step(-1)).pack(side="left", padx=2, pady=2)
+        tk.Button(bar, text="next ▶", command=lambda: self._step(1)).pack(side="left", padx=2)
+        self.view_title = tk.Label(bar, text="—", font=("Segoe UI", 9, "bold"))
+        self.view_title.pack(side="left", padx=10)
+        tk.Button(bar, text="reset", command=self._reset_view).pack(side="right", padx=2)
+        tk.Button(bar, text="zoom −", command=lambda: self._zoom_btn(1.25)).pack(side="right", padx=2)
+        tk.Button(bar, text="zoom +", command=lambda: self._zoom_btn(0.8)).pack(side="right", padx=2)
+        tk.Button(bar, text="↻ 90°", command=lambda: self._rotate(1)).pack(side="right", padx=2)
+        tk.Button(bar, text="↺ 90°", command=lambda: self._rotate(-1)).pack(side="right", padx=2)
+
+        self.nb = ttk.Notebook(center)
+        self.nb.pack(fill="both", expand=True)
+        for tabkey, label in (("label", "Label"), ("thumb", "Thumbs")):
+            tab = tk.Frame(self.nb)
+            self.nb.add(tab, text=label)
+            fig = Figure(figsize=(5, 5), tight_layout=True)
+            ax = fig.add_subplot(111); ax.set_axis_off()
+            canvas = FigureCanvasTkAgg(fig, master=tab)
+            canvas.get_tk_widget().pack(fill="both", expand=True)
+            self.figs[tabkey] = fig; self.axes[tabkey] = ax
+            self.canvases[tabkey] = canvas
+            self.navs[tabkey] = gw.CanvasNav(canvas, ax)
+
+    def _label_path(self, entry) -> Path | None:
+        p = self.out_dir / "labels" / f"{entry.scene.file_stem}_label.png"
+        return p if p.exists() else None
+
+    def _cur_tab(self) -> str:
+        try:
+            return "label" if self.nb.index(self.nb.select()) == 0 else "thumb"
+        except tk.TclError:
+            return "label"
+
+    def _on_pick(self, entry) -> None:
+        for i, e in enumerate(self.entries):
+            if e.scene.key == entry.scene.key:
+                self._show_section(i)
+                return
+
+    def _step(self, d: int) -> None:
+        if self.entries:
+            self._show_section((self.cur_idx + d) % len(self.entries))
+
+    def _show_section(self, idx: int) -> None:
+        if not self.entries:
+            return
+        self.cur_idx = idx % len(self.entries)
+        entry = self.entries[self.cur_idx]
+        self._rot = {"label": 0, "thumb": 0}
+        self.view_title.configure(
+            text=f"{entry.alias}   [{self.cur_idx + 1}/{len(self.entries)}]")
+        self._raw["label"] = _read_rgb(self._label_path(entry))
+        self._raw["thumb"] = _read_rgb(
+            entry.thumb_path if entry.thumb_path.exists() else None)
+        self._redraw_tab("label")
+        self._redraw_tab("thumb")
+        self._focus_section(entry)
+
+    def _redraw_tab(self, tabkey: str) -> None:
+        ax = self.axes[tabkey]
+        ax.clear(); ax.set_axis_off()
+        img = self._raw[tabkey]
+        if img is None:
+            ax.text(0.5, 0.5, "(no image — run Scan)", ha="center", va="center",
+                    color="#999", fontsize=11)
+        else:
+            ax.imshow(np.rot90(img, self._rot[tabkey]) if self._rot[tabkey] else img)
+        self.navs[tabkey].clear_home()
+        self.canvases[tabkey].draw_idle()
+        self.navs[tabkey].set_home()
+
+    def _rotate(self, direction: int) -> None:
+        t = self._cur_tab()
+        self._rot[t] = (self._rot[t] + direction) % 4
+        self._redraw_tab(t)
+
+    def _zoom_btn(self, factor: float) -> None:
+        ax = self.axes[self._cur_tab()]
+        x0, x1 = ax.get_xlim(); y0, y1 = ax.get_ylim()
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        ax.set_xlim(cx - (cx - x0) * factor, cx + (x1 - cx) * factor)
+        ax.set_ylim(cy - (cy - y0) * factor, cy + (y1 - cy) * factor)
+        self.canvases[self._cur_tab()].draw_idle()
+
+    def _reset_view(self) -> None:
+        self.navs[self._cur_tab()].reset()
 
     def _build_table(self, parent: tk.Frame) -> None:
         cols = _RO_COLS + _EDIT_COLS
@@ -155,10 +275,24 @@ class InfoWindow(tk.Toplevel):
             messagebox.showerror("Save failed", str(exc), parent=self)
 
     def _reload(self) -> None:
-        for w in list(self.children.values()):
-            w.destroy()
-        self.__init__(self.master, self.data_dir, str(self.out_dir),
-                      str(self.out_dir / "config.yaml"))
+        self._build()
+
+    def _show_help(self) -> None:
+        gw.help_popup(self, "Info — help", [
+            ("Sections list",
+             "Click a thumbnail on the left to load that section in the viewer and "
+             "jump to its row in the table. prev/next steps through sections."),
+            ("Label / Thumbs viewer",
+             "Two tabs — the slide Label image (what identifies a slide) and the "
+             "section Thumbnail. Wheel zooms to the cursor; middle/right-drag pans; "
+             "the toolbar rotates 90° left/right, zooms in/out, and resets the view."),
+            ("Resolution",
+             "Labels and thumbs are shown at the resolution Scan saved them; zoom in "
+             "for detail (they can't be re-read finer from the CZI)."),
+            ("Table",
+             "Edit the identity columns the alias is built from and tick 'analyze' to "
+             "include a section. 'Save sections.csv' writes your edits back."),
+        ])
 
 
 # ---------------------------------------------------------------------------
