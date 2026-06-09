@@ -191,7 +191,8 @@ def _roi_fold_band(rgb: np.ndarray, region: np.ndarray,
 
 
 def compute_roi_layers(rgb: np.ndarray, cfg: Config, pixel_size_um: float | None,
-                       manual_thr: float | None = None) -> dict:
+                       manual_thr: float | None = None,
+                       exclude: np.ndarray | None = None) -> dict:
     """Compute every overlay layer for one full-res RGB ROI.
 
     Returns a dict of boolean masks (all the same H×W as *rgb*) plus the thresholds:
@@ -199,9 +200,15 @@ def compute_roi_layers(rgb: np.ndarray, cfg: Config, pixel_size_um: float | None
     ``sabg``, ``edge_removed``, ``nontissue``, and ``thr`` / ``thr_s``.
     The mask order matches `pipeline.analyze_scene` exactly (it calls the same
     `compute_region_masks` / `detect_sabg`), so what you tune here is what analysis does.
+
+    *exclude* is the manual exclusion mask (bool, same H×W as *rgb*, already cropped
+    to the ROI); the marked region is dropped from the tissue region up front, so it
+    leaves both the numerator and the denominator exactly as the pipeline does.
     """
     tcfg = cfg.tissue
     region = segment_tissue(rgb, tcfg)
+    if exclude is not None:
+        region = region & ~exclude
     conv = _roi_conv(rgb, cfg, region)
     region_c = (erode_mask(region, cfg.artifact.erode_px)
                 if cfg.artifact.enabled else region)

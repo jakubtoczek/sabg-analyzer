@@ -140,6 +140,14 @@ class PreviewWindow(tk.Toplevel):
         self._dirty = False
         self._slider_win: tk.Toplevel | None = None        # slider-setup popup
 
+        # manual exclusion mask (preview-drawn, display-resolution uint8 0/255)
+        self.brush_var = tk.StringVar(value="off")         # off | draw | erase
+        self.brush_mode: str | None = None
+        self.brush_size = tk.IntVar(value=18)
+        self.excl_mask: np.ndarray | None = None
+        self._excl_artist = None                           # red overlay AxesImage
+        self._painting = False
+
         self.sb_pos.trace_add("write", lambda *_: self._draw_sb_preview())
         self._build_layout()
         self._draw_sb_preview()
@@ -187,6 +195,18 @@ class PreviewWindow(tk.Toplevel):
         self.res_label.pack(side="left", padx=(6, 0))
         self._add_shared_tools(bar, "thumb")
 
+        # second row: manual exclusion brush (paint regions out of numerator+denominator)
+        bar2 = tk.Frame(tab)
+        bar2.pack(fill="x")
+        tk.Label(bar2, text="exclusion:").pack(side="left", padx=(2, 2))
+        for txt, val in (("off", "off"), ("draw ✏", "draw"), ("erase ⌫", "erase")):
+            tk.Radiobutton(bar2, text=txt, value=val, variable=self.brush_var,
+                           command=self._on_brush_mode).pack(side="left")
+        tk.Label(bar2, text="size").pack(side="left", padx=(8, 0))
+        ttk.Scale(bar2, from_=2, to=60, variable=self.brush_size, length=90).pack(side="left")
+        tk.Button(bar2, text="Clear excl", command=self.on_clear_exclude).pack(side="left", padx=(8, 2))
+        tk.Button(bar2, text="Save excl", command=self.on_save_exclude).pack(side="left", padx=2)
+
         self.thumb_fig = Figure(figsize=(6, 6), tight_layout=True)
         self.thumb_ax = self.thumb_fig.add_subplot(111)
         self.thumb_ax.set_axis_off()
@@ -199,6 +219,10 @@ class PreviewWindow(tk.Toplevel):
             minspanx=5, minspany=5, spancoords="pixels", interactive=True,
             props=dict(facecolor="orange", edgecolor="black", alpha=0.25, fill=True))
         self.selector.set_active(False)
+        # brush painting uses left-drag (only when a brush mode is active)
+        self.thumb_canvas.mpl_connect("button_press_event", self._on_brush_press)
+        self.thumb_canvas.mpl_connect("motion_notify_event", self._on_brush_drag)
+        self.thumb_canvas.mpl_connect("button_release_event", self._on_brush_release)
 
     def _build_roi_tab(self) -> None:
         tab = tk.Frame(self.nb)
@@ -267,6 +291,111 @@ class PreviewWindow(tk.Toplevel):
             self._show_display(self.disp_rgb)
         if self.roi_rgb is not None and self.layers is not None:
             self._redraw()
+
+    # -- manual exclusion brush --------------------------------------------
+    def _excl_path(self) -> Path | None:
+        """Where this section's exclusion mask lives (cfg ref or default slot)."""
+        if self.entry is None:
+            return None
+        rel = self.cfg.scene_exclude_mask(self.entry.scene.key) \
+            or f"exclude/{self.entry.scene.slug}.png"
+        return Path(self.out_dir) / rel
+
+    def _load_saved_excl(self) -> np.ndarray | None:
+        p = self._excl_path()
+        if p and p.exists():
+            m = cv2.imread(str(p), cv2.IMREAD_GRAYSCALE)
+            if m is not None:
+                return m > 127
+        return None
+
+    def _on_brush_mode(self) -> None:
+        mode = self.brush_var.get()
+        self.brush_mode = None if mode == "off" else mode
+        # the exclusion brush and the ROI rectangle both use left-drag -> exclusive
+        self.selector.set_active(self.brush_mode is None and self.roi_rgb is None)
+
+    def _on_brush_press(self, e) -> None:
+        if self.brush_mode is None or e.inaxes is not self.thumb_ax or e.xdata is None:
+            return
+        self._painting = True
+        self._paint_at(e.xdata, e.ydata)
+
+    def _on_brush_drag(self, e) -> None:
+        if self._painting and e.inaxes is self.thumb_ax and e.xdata is not None:
+            self._paint_at(e.xdata, e.ydata)
+
+    def _on_brush_release(self, _e) -> None:
+        self._painting = False
+
+    def _paint_at(self, x: float, y: float) -> None:
+        if self.excl_mask is None:
+            return
+        r = max(1, int(self.brush_size.get()))
+        val = 255 if self.brush_mode == "draw" else 0
+        cv2.circle(self.excl_mask, (int(round(x)), int(round(y))), r, val, -1)
+        self._refresh_excl_overlay()
+
+    def _refresh_excl_overlay(self) -> None:
+        """Repaint the translucent-red exclusion overlay on the thumbnail."""
+        if self.excl_mask is None:
+            return
+        rgba = np.zeros((*self.excl_mask.shape, 4), np.float32)
+        rgba[self.excl_mask > 0] = (1.0, 0.0, 0.0, 0.4)
+        if self._excl_artist is None:
+            self._excl_artist = self.thumb_ax.imshow(rgba, interpolation="nearest")
+        else:
+            self._excl_artist.set_data(rgba)
+        self.thumb_canvas.draw_idle()
+
+    def on_clear_exclude(self) -> None:
+        if self.excl_mask is not None:
+            self.excl_mask[:] = 0
+            self._refresh_excl_overlay()
+        self.status.configure(text="exclusion cleared (Save excl to persist)")
+
+    def on_save_exclude(self) -> None:
+        """Write the mask to out/exclude/<slug>.png and point cfg.scenes at it.
+
+        An empty mask removes the file + the cfg reference. Persisted to config.yaml
+        by 'Export → config' (consistent with the other tuned settings)."""
+        if self.entry is None or self.excl_mask is None:
+            return
+        key = self.entry.scene.key
+        rel = f"exclude/{self.entry.scene.slug}.png"
+        p = Path(self.out_dir) / rel
+        if not (self.excl_mask > 0).any():
+            if p.exists():
+                p.unlink()
+            self.cfg.scenes.get(key, {}).pop("exclude_mask", None)
+            self.status.configure(text="exclusion mask empty — removed")
+            return
+        p.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(p), self.excl_mask)
+        self.cfg.scenes.setdefault(key, {})["exclude_mask"] = rel
+        self._mark_dirty()
+        self.status.configure(
+            text=f"saved exclusion mask → {p.name}  (Export → config to persist)")
+
+    def _roi_exclude_crop(self) -> np.ndarray | None:
+        """The exclusion mask cropped + scaled to the open ROI (bool), or None."""
+        if (self.excl_mask is None or self.roi_rect is None or self.roi_rgb is None
+                or not (self.excl_mask > 0).any()):
+            return None
+        sc = self.entry.scene
+        mh, mw = self.excl_mask.shape
+        x, y, w, h = self.roi_rect                    # global full-res scene coords
+        mx0 = int(round((x - sc.x) / max(sc.w, 1) * mw))
+        mx1 = int(round((x - sc.x + w) / max(sc.w, 1) * mw))
+        my0 = int(round((y - sc.y) / max(sc.h, 1) * mh))
+        my1 = int(round((y - sc.y + h) / max(sc.h, 1) * mh))
+        mx0, mx1 = max(0, mx0), min(mw, max(mx0 + 1, mx1))
+        my0, my1 = max(0, my0), min(mh, max(my0 + 1, my1))
+        crop = self.excl_mask[my0:my1, mx0:mx1]
+        if crop.size == 0:
+            return None
+        rh, rw = self.roi_rgb.shape[:2]
+        return cv2.resize(crop, (rw, rh), interpolation=cv2.INTER_NEAREST) > 127
 
     def _roi_hint(self) -> None:
         self.roi_ax.clear()
@@ -340,6 +469,10 @@ class PreviewWindow(tk.Toplevel):
     def _select_section(self, entry: preview.SectionEntry) -> None:
         self.entry = entry
         self.clear_roi(refresh=False)         # switching sections clears any ROI
+        self.excl_mask = None                 # reload the section's mask (or blank)
+        self._excl_artist = None
+        self.brush_var.set("off")
+        self.brush_mode = None
         self.status.configure(text=f"{entry.alias}: loading view…")
         self.nb.select(0)
         self._reload_display()
@@ -389,8 +522,19 @@ class PreviewWindow(tk.Toplevel):
     def _show_display(self, rgb: np.ndarray) -> None:
         self.disp_rgb = rgb
         self.thumb_ax.clear()
+        self._excl_artist = None                 # cleared with the axes
         self.thumb_ax.set_axis_off()
         self.thumb_ax.imshow(self._wb(rgb, "disp") if self.wb_on.get() else rgb)
+        # exclusion mask follows the display resolution (load saved on a fresh section)
+        h, w = rgb.shape[:2]
+        if self.excl_mask is None:
+            saved = self._load_saved_excl()
+            self.excl_mask = (cv2.resize(saved.astype(np.uint8) * 255, (w, h),
+                                         interpolation=cv2.INTER_NEAREST)
+                              if saved is not None else np.zeros((h, w), np.uint8))
+        elif self.excl_mask.shape != (h, w):
+            self.excl_mask = cv2.resize(self.excl_mask, (w, h),
+                                        interpolation=cv2.INTER_NEAREST)
         title = "drag a ROI" if self.roi_rgb is None else "ROI fixed — Clear ROI to redraw"
         self.thumb_ax.set_title(f"{self.entry.alias} — {title}", fontsize=9)
         # Achieved µm/px: the display spans the whole scene bbox, so it's the
@@ -404,7 +548,8 @@ class PreviewWindow(tk.Toplevel):
             self.res_label.configure(text="loaded: —")
         self.thumb_canvas.draw_idle()
         self.thumb_nav.set_home()
-        self.selector.set_active(self.roi_rgb is None)
+        self.selector.set_active(self.roi_rgb is None and self.brush_mode is None)
+        self._refresh_excl_overlay()
         if self.roi_rgb is None:
             self.status.configure(
                 text=f"{self.entry.alias}: 'Draw ROI', then drag a rectangle.")
@@ -578,7 +723,8 @@ class PreviewWindow(tk.Toplevel):
             except ValueError:
                 manual = None
         cfg_snap = self._snapshot_cfg()
-        self._submit(self._compute, self.roi_rgb, cfg_snap, self.roi_px_um, manual,
+        excl = self._roi_exclude_crop()
+        self._submit(self._compute, self.roi_rgb, cfg_snap, self.roi_px_um, manual, excl,
                      tag="layers")
 
     def _snapshot_cfg(self):
@@ -590,8 +736,9 @@ class PreviewWindow(tk.Toplevel):
             detection=replace(c.detection), threshold=replace(c.threshold),
             overlay=replace(c.overlay))
 
-    def _compute(self, rgb, cfg, px_um, manual):
-        layers = preview.compute_roi_layers(rgb, cfg, px_um, manual_thr=manual)
+    def _compute(self, rgb, cfg, px_um, manual, exclude):
+        layers = preview.compute_roi_layers(rgb, cfg, px_um, manual_thr=manual,
+                                            exclude=exclude)
         return ("layers", layers)
 
     # -- worker plumbing ---------------------------------------------------
@@ -783,6 +930,11 @@ class PreviewWindow(tk.Toplevel):
              "'Draw ROI', then drag a rectangle (it shows live). Releasing opens the "
              "crop at full resolution in the ROI tab (capped at gui.preview_roi_cap_um). "
              "The ROI tab is greyed until a ROI is open. 'Clear ROI' starts over."),
+            ("Exclusion brush (Thumbnail tab)",
+             "Paint regions to drop from analysis (e.g. muscle next to tumour). "
+             "'draw' adds, 'erase' removes, 'size' sets the brush; 'Clear excl' wipes it. "
+             "'Save excl' writes the mask and points the config at it — excluded pixels "
+             "count as neither SABG+ nor tissue. 'Export → config' persists the link."),
             ("White-balanced",
              "Toggle a publication-style white balance on the displayed image "
              "(quantification always uses raw pixels — display only)."),

@@ -155,6 +155,15 @@ class Config:
         return replace(self.tissue,
                        **{k: v for k, v in ov.items() if hasattr(self.tissue, k)})
 
+    def scene_exclude_mask(self, key: str) -> str | None:
+        """Per-scene manual exclusion-mask path (relative to the output dir), or None.
+
+        Drawn in the preview, stored as a PNG and referenced from
+        ``scenes.<key>.exclude_mask``; the pipeline subtracts it from both the
+        numerator and the denominator (resolved against out_dir at analyze time)."""
+        v = self.scene_override(key).get("exclude_mask")
+        return str(v) if v else None
+
 
 def _update_dataclass(obj, data: dict[str, Any]) -> None:
     for k, v in data.items():

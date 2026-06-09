@@ -127,6 +127,22 @@ def _project(canvas, mask, off_x, off_y, tw, th, scale):
     canvas[by0:by1, bx0:bx1] |= (block > 0)
 
 
+def _load_exclude_mask(cfg: Config, out_dir: Path, scene: SceneInfo):
+    """The scene's manual exclusion mask as a native-size bool array, or None.
+
+    Stored proportional to the scene bounding box, so it upsamples linearly to any
+    working canvas (nearest); see `Config.scene_exclude_mask`."""
+    rel = cfg.scene_exclude_mask(scene.key)
+    if not rel:
+        return None
+    p = Path(out_dir) / rel
+    if not p.exists():
+        print(f"        {scene.key}: exclude_mask '{rel}' not found, ignoring")
+        return None
+    m = cv2.imread(str(p), cv2.IMREAD_GRAYSCALE)
+    return None if m is None else (m > 127)
+
+
 def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
                   alias: str | None = None, progress=None) -> dict:
     z = cfg.process_zoom
@@ -153,6 +169,15 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
     # border erosion (edge halos) on the *counting* region only.
     ov_tissue_count = (erode_mask(ov_tissue, cfg.artifact.erode_px)
                        if cfg.artifact.enabled else ov_tissue)
+
+    # Manual exclusion mask (preview-drawn): drop the marked region from BOTH the
+    # numerator and denominator everywhere downstream (tiles derive from these).
+    excl = _load_exclude_mask(cfg, out_dir, scene)
+    if excl is not None:
+        ex_ov = cv2.resize(excl.astype(np.uint8), (W, H),
+                           interpolation=cv2.INTER_NEAREST).astype(bool)
+        ov_tissue = ov_tissue & ~ex_ov
+        ov_tissue_count = ov_tissue_count & ~ex_ov
 
     # higher-res canvas for overlays + maps (decoupled from the gating overview).
     hd_rgb, hd_scale = czi_io.read_overview(
@@ -265,6 +290,9 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
     # confident seed; pass 2 uses this only to gate faint full-res positives. Full-res
     # seeds are always counted, so the HD mean-pool never loses punctate signal.
     hd_tissue = segment_tissue(hd_rgb, tcfg)   # computed here, reused for the maps below
+    if excl is not None:                        # same exclusion on the maps/HD canvas
+        hd_tissue = hd_tissue & ~cv2.resize(
+            excl.astype(np.uint8), (Wh, Hh), interpolation=cv2.INTER_NEAREST).astype(bool)
     hyst_on = cfg.detection.hysteresis
     low_thr = thr * cfg.detection.hyst_low_scale if hyst_on else thr
     hd_keep = None
