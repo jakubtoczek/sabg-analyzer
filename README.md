@@ -221,7 +221,7 @@ Key knobs (`config.example.yaml` documents them all):
 | `process_zoom` | Processing resolution. 1.0 = full res (recommended). Lower = faster, risks signal loss. |
 | `detection.primary` | `deconvolution` (default) or `opponent`. Both are always exported to compare. |
 | `detection.require_agreement` | SABG⁺ only where **both** scores fire (default true). Kills fold/density false positives. |
-| `threshold.scale` | Multiplies the auto threshold (default 0.9). With hysteresis on this is the **seed** (high) threshold — keep it fairly strict. |
+| `threshold.scale` | Multiplies the auto threshold (default 0.825). With hysteresis on this is the **seed** (high) threshold — keep it fairly strict. |
 | `detection.hysteresis` / `hyst_low_scale` / `hyst_teal_min` | **Seed + grow** detection (default on). Seed at `threshold.scale`, then grow each seed into the *connected* faint teal down to `seed × hyst_low_scale` (default 0.5), only into pixels at least `hyst_teal_min` teal (0.04). Captures faint teal contiguous with strong teal; rejects isolated faint/edge teal. Connectivity is decided at maps res; full-res seeds always count. |
 | `detection.auto_estimate` | Estimate the SABG stain vector per scene instead of using defaults. |
 | `artifact.enabled` / `dark_level` / `teal_min` / `erode_px` | Dark fold/debris rejection: dark-and-non-teal pixels + eroded border, excluded from numerator and denominator. |
