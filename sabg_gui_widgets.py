@@ -88,6 +88,31 @@ class ScrollFrame(tk.Frame):
 
 
 # ---------------------------------------------------------------------------
+# help popup
+# ---------------------------------------------------------------------------
+def help_popup(parent, title: str, sections) -> tk.Toplevel:
+    """A scrollable help window. *sections* is a list of ``(heading, body)``.
+
+    Used by the Preview and Config windows for a discoverable "what does each
+    control do" overview (per-field ``Tooltip``s cover the fine detail).
+    """
+    top = tk.Toplevel(parent)
+    top.title(title)
+    top.geometry("560x640")
+    sf = ScrollFrame(top)
+    sf.pack(fill="both", expand=True)
+    tk.Label(sf.interior, text=title, font=("Segoe UI", 12, "bold"),
+             anchor="w").pack(fill="x", padx=10, pady=(10, 4))
+    for heading, body in sections:
+        tk.Label(sf.interior, text=heading, font=("Segoe UI", 10, "bold"),
+                 anchor="w", fg="#1c3d6e").pack(fill="x", padx=10, pady=(8, 0))
+        tk.Label(sf.interior, text=body, font=("Segoe UI", 9), anchor="w",
+                 justify="left", wraplength=510).pack(fill="x", padx=16)
+    tk.Button(top, text="Close", command=top.destroy).pack(pady=6)
+    return top
+
+
+# ---------------------------------------------------------------------------
 # collapsible section
 # ---------------------------------------------------------------------------
 class CollapsibleFrame(tk.Frame):

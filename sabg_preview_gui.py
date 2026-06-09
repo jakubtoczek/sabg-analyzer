@@ -33,7 +33,7 @@ from matplotlib.figure import Figure
 from matplotlib.widgets import RectangleSelector
 
 import sabg_gui_widgets as gw
-from sabg_analyzer import export, overlay, preview
+from sabg_analyzer import export, overlay, preview, whitebalance
 from sabg_analyzer.config import load_config
 
 _VIEW_MULTS = [1, 2, 4, 8]          # thumb-resolution multipliers for the px/µm picker
@@ -131,12 +131,17 @@ class PreviewWindow(tk.Toplevel):
         self.sb_len = tk.StringVar(value="Auto")           # scale-bar length (µm)
         self.sb_label = tk.BooleanVar(value=True)
         self.sb_pos = tk.StringVar(value="bottom-right")
+        self.wb_on = tk.BooleanVar(value=False)            # raw <-> white-balanced display
+        self._wb_cache: dict[str, tuple] = {}              # which -> (src_rgb, wb_rgb)
+        self._sb_preview_canvases: list[tk.Canvas] = []    # scale-bar corner schematics
         self.show_vars: dict[str, tk.BooleanVar] = {}
         self.field_vars: dict[tuple[str, str], tk.Variable] = {}
         self._photo_refs: list[tk.PhotoImage] = []         # keep picker thumbs alive
         self._dirty = False
 
+        self.sb_pos.trace_add("write", lambda *_: self._draw_sb_preview())
         self._build_layout()
+        self._draw_sb_preview()
         self._populate_picker()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(100, self._drain_queue)
@@ -172,17 +177,14 @@ class PreviewWindow(tk.Toplevel):
         bar = tk.Frame(tab)
         bar.pack(fill="x")
         tk.Button(bar, text="Draw ROI", command=self.on_draw_roi).pack(side="left", padx=2, pady=2)
-        self.btn_open = tk.Button(bar, text="Open ROI", command=self.on_open_roi,
-                                  state="disabled")
-        self.btn_open.pack(side="left", padx=2)
         tk.Button(bar, text="Clear ROI", command=self.clear_roi).pack(side="left", padx=2)
-        tk.Button(bar, text="Reset view", command=lambda: self.thumb_nav.reset()).pack(side="left", padx=2)
-        tk.Label(bar, text="resolution").pack(side="left", padx=(12, 0))
+        tk.Label(bar, text="resolution").pack(side="left", padx=(10, 0))
         labels = self._res_labels()
         ttk.OptionMenu(bar, self.view_res, labels[0], *labels,
                        command=lambda _v: self._reload_display()).pack(side="left")
         self.res_label = tk.Label(bar, text="loaded: —", fg="#557", font=("Segoe UI", 8))
-        self.res_label.pack(side="left", padx=(8, 0))
+        self.res_label.pack(side="left", padx=(6, 0))
+        self._add_shared_tools(bar, "thumb")
 
         self.thumb_fig = Figure(figsize=(6, 6), tight_layout=True)
         self.thumb_ax = self.thumb_fig.add_subplot(111)
@@ -190,9 +192,11 @@ class PreviewWindow(tk.Toplevel):
         self.thumb_canvas = FigureCanvasTkAgg(self.thumb_fig, master=tab)
         self.thumb_canvas.get_tk_widget().pack(fill="both", expand=True)
         self.thumb_nav = CanvasNav(self.thumb_canvas, self.thumb_ax)
+        # useblit + props => the rectangle renders live while dragging.
         self.selector = RectangleSelector(
-            self.thumb_ax, self._on_rect, useblit=False, button=[1],
-            minspanx=5, minspany=5, spancoords="pixels", interactive=True)
+            self.thumb_ax, self._on_rect, useblit=True, button=[1],
+            minspanx=5, minspany=5, spancoords="pixels", interactive=True,
+            props=dict(facecolor="orange", edgecolor="black", alpha=0.25, fill=True))
         self.selector.set_active(False)
 
     def _build_roi_tab(self) -> None:
@@ -201,14 +205,8 @@ class PreviewWindow(tk.Toplevel):
         self.roi_tab = tab
         bar = tk.Frame(tab)
         bar.pack(fill="x")
-        tk.Button(bar, text="Reset view", command=lambda: self.roi_nav.reset()).pack(side="left", padx=2, pady=2)
-        tk.Button(bar, text="Save…", command=self.on_save).pack(side="left", padx=2)
-        tk.Label(bar, text="bar").pack(side="left", padx=(10, 0))
-        ttk.OptionMenu(bar, self.sb_len, "Auto", "Auto", "50", "100", "200",
-                       "500", "1000").pack(side="left")
-        tk.Checkbutton(bar, text="label", variable=self.sb_label).pack(side="left")
-        ttk.OptionMenu(bar, self.sb_pos, "bottom-right", *_SB_POS.keys()).pack(side="left")
-        tk.Button(bar, text="Close ROI", command=self.clear_roi).pack(side="left", padx=(10, 2))
+        tk.Button(bar, text="Close ROI", command=self.clear_roi).pack(side="left", padx=2, pady=2)
+        self._add_shared_tools(bar, "roi")
 
         self.roi_fig = Figure(figsize=(6, 6), tight_layout=True)
         self.roi_ax = self.roi_fig.add_subplot(111)
@@ -217,6 +215,57 @@ class PreviewWindow(tk.Toplevel):
         self.roi_canvas.get_tk_widget().pack(fill="both", expand=True)
         self.roi_nav = CanvasNav(self.roi_canvas, self.roi_ax)
         self._roi_hint()
+        self.nb.tab(self.roi_tab, state="disabled")    # greyed until a ROI is opened
+
+    # -- shared toolbar / scale-bar preview / white balance ----------------
+    def _nav(self, source: str):
+        return self.thumb_nav if source == "thumb" else self.roi_nav
+
+    def _add_shared_tools(self, bar: tk.Frame, source: str) -> None:
+        """Controls present on BOTH tabs, in the same order: Reset view, white
+        balance toggle, scale-bar (length/label/corner + preview), Save, Help."""
+        tk.Button(bar, text="Reset view",
+                  command=lambda: self._nav(source).reset()).pack(side="left", padx=(10, 2))
+        tk.Checkbutton(bar, text="white-balanced", variable=self.wb_on,
+                       command=self._on_wb_toggle).pack(side="left", padx=(8, 2))
+        tk.Label(bar, text="bar").pack(side="left", padx=(8, 0))
+        ttk.OptionMenu(bar, self.sb_len, self.sb_len.get(), "Auto", "50", "100",
+                       "200", "500", "1000").pack(side="left")
+        tk.Checkbutton(bar, text="label", variable=self.sb_label).pack(side="left")
+        ttk.OptionMenu(bar, self.sb_pos, self.sb_pos.get(),
+                       *_SB_POS.keys()).pack(side="left")
+        cvp = tk.Canvas(bar, width=24, height=16, highlightthickness=1,
+                        highlightbackground="#aaa", bg="white")
+        cvp.pack(side="left", padx=4)
+        self._sb_preview_canvases.append(cvp)
+        tk.Button(bar, text="Save…",
+                  command=lambda: self.on_save(source)).pack(side="left", padx=(8, 2))
+        tk.Button(bar, text="?", width=2, command=self._show_help).pack(side="right", padx=2)
+
+    def _draw_sb_preview(self) -> None:
+        """Tiny schematic of where the scale bar will land in each corner."""
+        pos = _SB_POS.get(self.sb_pos.get(), "br")
+        for cv in getattr(self, "_sb_preview_canvases", []):
+            cv.delete("all")
+            w = int(cv["width"]); h = int(cv["height"])
+            bx = 3 if "l" in pos else w - 12
+            by = 3 if pos.startswith("t") else h - 6
+            cv.create_rectangle(bx, by, bx + 9, by + 3, fill="black", outline="")
+
+    def _wb(self, rgb: np.ndarray, which: str) -> np.ndarray:
+        """White-balanced copy of *rgb* (cached per *which* by image identity)."""
+        c = self._wb_cache.get(which)
+        if c is not None and c[0] is rgb:
+            return c[1]
+        out = whitebalance.white_balance(rgb, whitebalance.estimate_white_point(rgb))
+        self._wb_cache[which] = (rgb, out)
+        return out
+
+    def _on_wb_toggle(self) -> None:
+        if self.disp_rgb is not None and self.roi_rgb is None:
+            self._show_display(self.disp_rgb)
+        if self.roi_rgb is not None and self.layers is not None:
+            self._redraw()
 
     def _roi_hint(self) -> None:
         self.roi_ax.clear()
@@ -234,9 +283,11 @@ class PreviewWindow(tk.Toplevel):
         top = tk.Frame(body, padx=6, pady=6)
         top.pack(fill="x")
         self.btn_recompute = tk.Button(top, text="↻  Recompute", font=("Segoe UI", 10, "bold"),
-                                       bg="#2e7d32", fg="white", command=self.request_recompute)
+                                       bg="#3a7d44", fg="white", activebackground="#2f6638",
+                                       command=self.request_recompute)
         self.btn_recompute.pack(side="left", fill="x", expand=True)
-        self.dirty_dot = tk.Label(top, text="●", fg="#bbb", font=("Segoe UI", 12))
+        self.dirty_dot = tk.Label(top, text="✓ up to date", fg="#3a7d44",
+                                  font=("Segoe UI", 9, "bold"))
         self.dirty_dot.pack(side="left", padx=4)
         tk.Button(top, text="Export → config", command=self.on_export).pack(side="left", padx=2)
 
@@ -334,7 +385,7 @@ class PreviewWindow(tk.Toplevel):
         self.disp_rgb = rgb
         self.thumb_ax.clear()
         self.thumb_ax.set_axis_off()
-        self.thumb_ax.imshow(rgb)
+        self.thumb_ax.imshow(self._wb(rgb, "disp") if self.wb_on.get() else rgb)
         title = "drag a ROI" if self.roi_rgb is None else "ROI fixed — Clear ROI to redraw"
         self.thumb_ax.set_title(f"{self.entry.alias} — {title}", fontsize=9)
         # Achieved µm/px: the display spans the whole scene bbox, so it's the
@@ -389,13 +440,9 @@ class PreviewWindow(tk.Toplevel):
         um = ww * sc.pixel_size_um if sc.pixel_size_um else 0
         capped = " (at cap)" if self.cfg.gui.preview_roi_cap_um and um >= \
             self.cfg.gui.preview_roi_cap_um - 1 else ""
-        self.btn_open.configure(state="normal")
-        self.status.configure(text=f"ROI {ww}x{hh}px (~{um:.0f}µm){capped} — 'Open ROI'.")
-
-    def on_open_roi(self) -> None:
-        if self.entry is None or self.roi_rect is None:
-            return
-        self.status.configure(text="reading ROI at full resolution…")
+        # Drawing a ROI opens it directly (no separate "Open ROI" step).
+        self.status.configure(
+            text=f"ROI {ww}x{hh}px (~{um:.0f}µm){capped} — reading at full resolution…")
         self._submit(self._read_roi, self.entry.scene, self.roi_rect, tag="roi")
 
     def _read_roi(self, scene, rect):
@@ -417,7 +464,9 @@ class PreviewWindow(tk.Toplevel):
         self.layers = None
         self._sel_extents = None
         self.roi_nav.clear_home()
-        self.btn_open.configure(state="disabled")
+        self._wb_cache.pop("roi", None)
+        if hasattr(self, "roi_tab"):
+            self.nb.tab(self.roi_tab, state="disabled")    # no ROI -> grey the tab
         self._roi_hint()
         if refresh and self.entry is not None and self.disp_rgb is not None:
             self._show_display(self.disp_rgb)   # clears axes -> removes the rectangle
@@ -439,13 +488,13 @@ class PreviewWindow(tk.Toplevel):
 
     def _mark_dirty(self) -> None:
         self._dirty = True
-        self.dirty_dot.configure(fg="#e8a000")
-        self.btn_recompute.configure(bg="#e8a000")
+        self.dirty_dot.configure(text="● changed", fg="#c8862a")
+        self.btn_recompute.configure(bg="#c8862a", activebackground="#a86f22")
 
     def _clear_dirty(self) -> None:
         self._dirty = False
-        self.dirty_dot.configure(fg="#bbb")
-        self.btn_recompute.configure(bg="#2e7d32")
+        self.dirty_dot.configure(text="✓ up to date", fg="#3a7d44")
+        self.btn_recompute.configure(bg="#3a7d44", activebackground="#2f6638")
 
     def _on_manual_toggle(self) -> None:
         auto = self.manual_auto.get()
@@ -509,7 +558,9 @@ class PreviewWindow(tk.Toplevel):
                     self._show_display(item[1])
                 elif kind == "roi":
                     self.roi_rgb, self.roi_px_um = item[1], item[2]
+                    self._wb_cache.pop("roi", None)     # new ROI invalidates WB cache
                     self.selector.set_active(False)     # ROI fixed while open
+                    self.nb.tab(self.roi_tab, state="normal")
                     self.nb.select(self.roi_tab)
                     self.request_recompute()
                 elif kind == "layers":
@@ -567,13 +618,14 @@ class PreviewWindow(tk.Toplevel):
     def _composite(self) -> np.ndarray | None:
         if self.roi_rgb is None or self.layers is None:
             return None
+        base = self._wb(self.roi_rgb, "roi") if self.wb_on.get() else self.roi_rgb
         ov = self.cfg.overlay
         order = []
         for key, color_attr, alpha_attr, _d in gw.LAYER_SPEC:
             if self.show_vars[key].get():
                 order.append((self.layers[key], tuple(getattr(ov, color_attr)),
                               float(getattr(ov, alpha_attr))))
-        return overlay.composite_overlay(self.roi_rgb, order)
+        return overlay.composite_overlay(base, order)
 
     def _redraw(self) -> None:
         comp = self._composite()
@@ -592,24 +644,33 @@ class PreviewWindow(tk.Toplevel):
         self.roi_canvas.draw_idle()
 
     # -- save / export / close ---------------------------------------------
-    def on_save(self) -> None:
-        comp = self._composite()
-        if comp is None:
-            messagebox.showinfo("Save", "Open a ROI and recompute first.", parent=self)
-            return
+    def on_save(self, source: str = "roi") -> None:
+        """Save the current view as an image with an optional scale bar.
+
+        *source* "thumb" saves the whole-section display (WB-aware, no overlay);
+        "roi" saves the ROI overlay composite. (§2 replaces this with multi-preset
+        Export; kept here so both tabs have a working Save in the shared toolbar.)
+        """
+        if source == "thumb":
+            if self.disp_rgb is None or self.entry is None:
+                messagebox.showinfo("Save", "Pick a section first.", parent=self)
+                return
+            img = self._wb(self.disp_rgb, "disp") if self.wb_on.get() else self.disp_rgb
+            px_um, target, default = self._loaded_um, 1000.0, f"{self.entry.alias}_thumb.png"
+        else:
+            img = self._composite()
+            if img is None:
+                messagebox.showinfo("Save", "Open a ROI and recompute first.", parent=self)
+                return
+            px_um, target, default = self.roi_px_um, 200.0, f"{self.entry.alias}_roi.png"
         path = filedialog.asksaveasfilename(
             parent=self, defaultextension=".png",
-            filetypes=[("PNG", "*.png"), ("JPEG", "*.jpg")],
-            initialfile=f"{self.entry.alias}_roi.png")
+            filetypes=[("PNG", "*.png"), ("JPEG", "*.jpg")], initialfile=default)
         if not path:
             return
-        img = comp
-        px_um = self.roi_px_um
         if px_um:
-            if self.sb_len.get() == "Auto":
-                bar_um = export.adaptive_bar_um(img.shape[1], px_um, target_um=200.0)
-            else:
-                bar_um = float(self.sb_len.get())
+            bar_um = (export.adaptive_bar_um(img.shape[1], px_um, target_um=target)
+                      if self.sb_len.get() == "Auto" else float(self.sb_len.get()))
             img = export.draw_scalebar(img, px_um, bar_um, color=(0, 0, 0),
                                        label=self.sb_label.get(),
                                        position=_SB_POS[self.sb_pos.get()])
@@ -635,6 +696,37 @@ class PreviewWindow(tk.Toplevel):
             messagebox.showinfo("Exported", f"Settings written to\n{dst}", parent=self)
         except Exception as exc:
             messagebox.showerror("Export failed", str(exc), parent=self)
+
+    # -- help --------------------------------------------------------------
+    def _show_help(self) -> None:
+        gw.help_popup(self, "Preview / Tune — help", [
+            ("Picking a section",
+             "Click a thumbnail on the left. Thumbnails are sized proportional to "
+             "each section's physical size."),
+            ("Canvas navigation",
+             "Mouse wheel zooms to the cursor; middle- or right-drag pans; "
+             "'Reset view' restores the full extent."),
+            ("Resolution (Thumbnail tab)",
+             "Choose the µm/px the section is read at for ROI drawing. 'loaded: …' "
+             "shows the actual µm/px achieved for the image on screen."),
+            ("Drawing a ROI",
+             "'Draw ROI', then drag a rectangle (it shows live). Releasing opens the "
+             "crop at full resolution in the ROI tab (capped at gui.preview_roi_cap_um). "
+             "The ROI tab is greyed until a ROI is open. 'Clear ROI' starts over."),
+            ("White-balanced",
+             "Toggle a publication-style white balance on the displayed image "
+             "(quantification always uses raw pixels — display only)."),
+            ("Scale bar",
+             "Length (Auto picks a nice value), label on/off, and corner; the little "
+             "schematic shows where the bar lands. Used by Save."),
+            ("Tuning (right panel)",
+             "Edit any detection setting; the ROI recomputes after a short pause "
+             "(orange 'changed' → green 'up to date'). The Result panel shows %SABG, "
+             "thresholds, tissue%, pixel counts and mm² areas. Layers toggles which "
+             "overlay masks are drawn / their colour + alpha."),
+            ("Export → config",
+             "Writes the current settings to config.yaml for the batch analyze/export."),
+        ])
 
     def _on_close(self) -> None:
         self.destroy()
