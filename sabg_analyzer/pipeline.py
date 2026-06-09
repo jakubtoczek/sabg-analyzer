@@ -30,6 +30,8 @@ from pylibCZIrw import czi as pyczi
 from . import czi_io, edge as edge_filter, overlay, scoring
 from .config import Config
 from .czi_io import SceneInfo
+from .masks import (_grow_connected, _primary_secondary, compute_region_masks,
+                    detect_sabg)
 from .metadata import (LABEL_COLUMNS, build_aliases, section_skipped,
                        write_sections_template)
 from .progress import Progress, scene_tile_count
@@ -103,11 +105,6 @@ def _score_ranges(primary: str) -> tuple[tuple[float, float], tuple[float, float
     return (opp, dec) if primary == "opponent" else (dec, opp)
 
 
-def _primary_secondary(deconv: np.ndarray, opp: np.ndarray, primary: str):
-    """Return (primary_score, secondary_score) for the configured primary."""
-    return (opp, deconv) if primary == "opponent" else (deconv, opp)
-
-
 def _overview_block(off, extent, scale, limit):
     a = int(round(off * scale))
     b = int(round((off + extent) * scale))
@@ -126,21 +123,6 @@ def _project(canvas, mask, off_x, off_y, tw, th, scale):
     block = cv2.resize(mask.astype(np.uint8), (bx1 - bx0, by1 - by0),
                        interpolation=cv2.INTER_AREA)
     canvas[by0:by1, bx0:bx1] |= (block > 0)
-
-
-def _grow_connected(seed: np.ndarray, cand: np.ndarray) -> np.ndarray:
-    """Hysteresis reconstruction: keep the connected components of *cand* that
-    contain at least one *seed* pixel (8-connectivity). Both are boolean masks of
-    the same shape; *seed* must be a subset of *cand* for the result to include it.
-    """
-    if not cand.any() or not seed.any():
-        return seed & cand
-    n, lab = cv2.connectedComponents(cand.astype(np.uint8), connectivity=8)
-    hit = np.unique(lab[seed & cand])
-    hit = hit[hit != 0]                       # 0 is the background label
-    if hit.size == 0:
-        return np.zeros_like(cand)
-    return np.isin(lab, hit)
 
 
 def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
@@ -210,14 +192,9 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
 
         region = _resize(ov_tissue)            # coarse blob (non-eroded), adaptive
         region_c = _resize(ov_tissue_count)    # eroded blob (for counting)
-        raw = tissue_mask(rgb, tcfg)           # fine gap/white-glass within the region
-        opp = scoring.opponent_score(rgb)
-        art = (artifact_mask(rgb, opp, cfg.artifact) & region & raw
-               if cfg.artifact.enabled else np.zeros(raw.shape, bool))
-        fold = (_resize(ov_fold) & region & raw & ~art
-                if cfg.fold.enabled else np.zeros(raw.shape, bool))
-        t = region_c & raw & ~art
-        return t, art, fold, opp
+        fold_band = _resize(ov_fold) if cfg.fold.enabled else None
+        return compute_region_masks(rgb, tcfg, cfg, region=region,
+                                    region_c=region_c, fold_band=fold_band)
 
     # --- pass 1: thresholds for both scores over countable tissue ---------
     thr_override = cfg.scene_threshold(scene.key)
@@ -308,11 +285,6 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
     want_fold_pos = cfg.fold.enabled and cfg.overlay.fold_show_sabg
     edge_on = cfg.edge.enabled
     px_um_proc = (scene.pixel_size_um / z) if scene.pixel_size_um else None
-    expand_px = max(0, int(cfg.detection.expand_px))
-    expand_teal_min = cfg.detection.expand_teal_min
-    expand_k = (cv2.getStructuringElement(
-        cv2.MORPH_ELLIPSE, (2 * expand_px + 1, 2 * expand_px + 1))
-        if expand_px else None)
     ov_pos = np.zeros((H, W), bool)
     ov_art = np.zeros((H, W), bool)
     ov_edge = np.zeros((H, W), bool)
@@ -339,44 +311,36 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
             fold_px += int(fold.sum())
         if not t.any() and not (want_fold_pos and fold_hot):
             continue
-        deconv = scoring.deconvolution_score(rgb, conv)
-        p_s, s_s = _primary_secondary(deconv, opp, primary)
-        hot = (p_s >= thr)                # seed / high threshold
-        if agree and thr_s is not None:
-            hot &= (s_s >= thr_s)
+        # Tile-shaped resample of the HD-canvas connectivity (faint teal reachable
+        # from a seed); detect_sabg gates the tile's grow region with it. Always an
+        # array when hysteresis is on (zeros for a degenerate block = no grow), so
+        # the pipeline never takes detect_sabg's direct-grow (preview) branch.
+        keep_here = None
+        if hyst_on:
+            keep_here = np.zeros(rgb.shape[:2], bool)
+            hx0, hx1 = _overview_block(ox, tw, hd_scale, Wh)
+            hy0, hy1 = _overview_block(oy, th, hd_scale, Hh)
+            if hx1 > hx0 and hy1 > hy0:
+                keep_here = cv2.resize(
+                    hd_keep[hy0:hy1, hx0:hx1].astype(np.uint8),
+                    (rgb.shape[1], rgb.shape[0]),
+                    interpolation=cv2.INTER_NEAREST).astype(bool)
+        d = detect_sabg(rgb, t, opp, cfg, conv, thr, thr_s, px_um_proc,
+                        fold=fold, keep_here=keep_here)
         if t.any():
-            pos = t & hot
-            if hyst_on and hd_keep is not None:   # grow seeds into connected faint teal
-                cand = t & (p_s >= low_thr) & (opp >= cfg.detection.hyst_teal_min)
-                hx0, hx1 = _overview_block(ox, tw, hd_scale, Wh)
-                hy0, hy1 = _overview_block(oy, th, hd_scale, Hh)
-                if hx1 > hx0 and hy1 > hy0 and cand.any():
-                    keep_here = cv2.resize(
-                        hd_keep[hy0:hy1, hx0:hx1].astype(np.uint8),
-                        (rgb.shape[1], rgb.shape[0]),
-                        interpolation=cv2.INTER_NEAREST).astype(bool)
-                    pos = pos | (cand & keep_here)   # full-res seeds | grown faint teal
-            if cfg.fold.enabled and not cfg.fold.exclude_from_tissue and fold is not None:
-                pos &= ~fold              # numerator-only: drop fold positives
-            if edge_on:                   # drop thin edge-shadow rims (numerator only)
-                pos, removed = edge_filter.refine_positive(
-                    pos, rgb, px_um_proc, cfg.edge)
-                if removed.any():
-                    edge_px += int(removed.sum())
-                    _project(ov_edge, removed, ox, oy, tw, th, scale)
-                    _project(hd_edge, removed, ox, oy, tw, th, hd_scale)
-            if expand_k is not None and pos.any():   # grow kept positives into nearby teal
-                grown = cv2.dilate(pos.astype(np.uint8), expand_k).astype(bool) & t
-                if expand_teal_min > 0:               # don't grow into achromatic edges/tissue
-                    grown &= pos | (opp >= expand_teal_min)
-                pos = grown
+            pos = d["sabg"]
+            removed = d["edge_removed"]
+            if removed is not None and removed.any():
+                edge_px += int(removed.sum())
+                _project(ov_edge, removed, ox, oy, tw, th, scale)
+                _project(hd_edge, removed, ox, oy, tw, th, hd_scale)
             tissue_px += int(t.sum())
             positive_px += int(pos.sum())
             if pos.any():
                 _project(ov_pos, pos, ox, oy, tw, th, scale)
                 _project(hd_pos, pos, ox, oy, tw, th, hd_scale)
         if want_fold_pos and fold_hot:
-            pos_fold = fold & hot         # SABG+ pixels excluded by the fold band
+            pos_fold = fold & d["hot"]    # SABG+ pixels excluded by the fold band
             if edge_on:
                 pos_fold, _ = edge_filter.refine_positive(
                     pos_fold, rgb, px_um_proc, cfg.edge)
