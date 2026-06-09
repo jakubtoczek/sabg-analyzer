@@ -106,6 +106,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="also write large standalone heatmaps (default: compact)")
     a.add_argument("--continue", "--reuse", dest="continue_run", action="store_true",
                    help="resume: skip sections already in results.csv and append the rest")
+    a.add_argument("--no-cache", dest="no_cache", action="store_true",
+                   help="ignore the per-section analysis cache (out/cache/) and recompute "
+                        "every section even when its config is unchanged")
     a.add_argument("--export", dest="export_on_analyze", default=None,
                    action=argparse.BooleanOptionalAction,
                    help="run figure export after analyze (default on; --no-export keeps "
@@ -180,7 +183,8 @@ def _dispatch(args) -> int:
             show_progress = True
         pipeline.analyze(args.data, args.out, cfg, metadata, only_scene=args.scene,
                          show_progress=show_progress,
-                         continue_run=getattr(args, "continue_run", False))
+                         continue_run=getattr(args, "continue_run", False),
+                         use_cache=not getattr(args, "no_cache", False))
         return 0
 
     if args.command == "export":

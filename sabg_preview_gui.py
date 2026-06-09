@@ -97,6 +97,30 @@ class CanvasNav:
             self._panning = False
 
 
+class _GuiProgress:
+    """Minimal Progress stand-in for `pipeline.analyze_scene`: posts the section
+    completion percentage to the GUI queue (throttled to whole-percent steps)."""
+
+    def __init__(self, q: queue.Queue) -> None:
+        self.q = q
+        self.total = 1
+        self.done = 0
+        self._last = -1
+
+    def start_section(self, alias, total) -> None:
+        self.total = max(1, int(total))
+        self.done = 0
+        self._last = -1
+        self.q.put(("section_progress", 0.0))
+
+    def update(self, k: int = 1) -> None:
+        self.done += k
+        pct = 100.0 * self.done / self.total
+        if int(pct) != self._last:
+            self._last = int(pct)
+            self.q.put(("section_progress", pct))
+
+
 class PreviewWindow(tk.Toplevel):
     def __init__(self, master, data_dir: str, out_dir: str, config_path: str) -> None:
         super().__init__(master)
@@ -179,6 +203,9 @@ class PreviewWindow(tk.Toplevel):
         self.nb.pack(fill="both", expand=True)
         self._build_thumb_tab()
         self._build_roi_tab()
+        # Layers apply to the ROI overlay, so enable them only on the ROI tab.
+        self.nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+        self._set_layers_enabled(False)
 
     def _build_thumb_tab(self) -> None:
         tab = tk.Frame(self.nb)
@@ -291,6 +318,72 @@ class PreviewWindow(tk.Toplevel):
             self._show_display(self.disp_rgb)
         if self.roi_rgb is not None and self.layers is not None:
             self._redraw()
+
+    # -- layers panel gating (ROI tab only) --------------------------------
+    def _iter_descendants(self, w):
+        for c in w.winfo_children():
+            yield c
+            yield from self._iter_descendants(c)
+
+    def _set_layers_enabled(self, enabled: bool) -> None:
+        state = "normal" if enabled else "disabled"
+        for w in self._iter_descendants(self._layers_frame):
+            try:
+                w.configure(state=state)
+            except tk.TclError:
+                pass
+
+    def _on_tab_changed(self, _evt=None) -> None:
+        try:
+            on_roi = self.nb.index(self.nb.select()) == self.nb.index(self.roi_tab)
+        except tk.TclError:
+            on_roi = False
+        self._set_layers_enabled(on_roi)
+
+    # -- whole-section compute (real analyze_scene) ------------------------
+    def on_compute_section(self) -> None:
+        if self.entry is None:
+            messagebox.showinfo("Compute section", "Pick a section first.", parent=self)
+            return
+        if self._busy:
+            messagebox.showinfo("Compute section", "Busy — wait for the current task.",
+                                parent=self)
+            return
+        if not messagebox.askyesno(
+                "Compute whole section",
+                "Run the FULL analysis for this section?\n\n"
+                "It streams the whole section at full resolution (this can take "
+                "minutes), writes its maps, and caches the result so Analyze can "
+                "skip it while the config is unchanged.\n\nContinue?", parent=self):
+            return
+        self.status.configure(text=f"{self.entry.alias}: computing whole section… 0%")
+        self._submit(self._compute_section, self.entry.scene, self._snapshot_cfg(),
+                     self.entry.alias, tag="section")
+
+    def _compute_section(self, scene, cfg, alias):
+        import pylibCZIrw.czi as pyczi
+        from sabg_analyzer import pipeline
+        prog = _GuiProgress(self.q)
+        with pyczi.open_czi(scene.path) as doc:
+            row = pipeline.analyze_scene(doc, scene, cfg, Path(self.out_dir),
+                                         alias=alias, progress=prog)
+        pipeline._write_cache(Path(self.out_dir), scene, cfg, row)  # skip-on-analyze
+        return ("section", row, scene.pixel_size_um)
+
+    def _show_section_stats(self, row: dict, px_um) -> None:
+        thr_s = row.get("threshold_secondary")
+        lines = [
+            f"SECTION  %SABG = {row.get('pct_sabg', 0)}",
+            f"thr {row.get('threshold')}" + (f"   2nd {thr_s}" if thr_s else ""),
+            f"SABG+  {int(row.get('positive_px', 0)):>12,} px  "
+            f"{(row.get('sabg_area_mm2') or 0):.4f} mm²",
+            f"tissue {int(row.get('tissue_px', 0)):>12,} px  "
+            f"{(row.get('tissue_area_mm2') or 0):.3f} mm²",
+            f"fold {int(row.get('fold_px', 0)):,}  "
+            f"artifact {int(row.get('artifact_px', 0)):,}  "
+            f"edge {int(row.get('edge_px', 0)):,} px",
+        ]
+        self.stats_label.configure(text="\n".join(lines))
 
     # -- manual exclusion brush --------------------------------------------
     def _excl_path(self) -> Path | None:
@@ -443,10 +536,14 @@ class PreviewWindow(tk.Toplevel):
         # guided "slider setup" mode (one sensitivity bar per layer)
         tk.Button(body, text="🎚  Slider setup…", command=self.on_slider_setup).pack(
             fill="x", padx=6, pady=(2, 4))
+        # whole-section compute (real analyze_scene; heavy) -> caches + section stats
+        tk.Button(body, text="▣  Compute whole section…",
+                  command=self.on_compute_section).pack(fill="x", padx=6, pady=(0, 4))
 
-        # layers panel (show / colour / alpha per layer)
-        lay = tk.LabelFrame(body, text="Layers", padx=6, pady=4)
+        # layers panel (show / colour / alpha per layer); enabled on the ROI tab only
+        lay = tk.LabelFrame(body, text="Layers (ROI overlay)", padx=6, pady=4)
         lay.pack(fill="x", padx=6, pady=2)
+        self._layers_frame = lay
         gw.build_layers_panel(lay, self.cfg, self.show_vars, self._redraw)
 
         # collapsible detection groups
@@ -760,9 +857,19 @@ class PreviewWindow(tk.Toplevel):
         try:
             while True:
                 item = self.q.get_nowait()
-                self._busy = False
                 kind = item[0]
-                if kind == "display":
+                if kind == "section_progress":      # not terminal: keep _busy set
+                    self.status.configure(
+                        text=f"computing whole section… {item[1]:.0f}%")
+                    continue
+                self._busy = False
+                if kind == "section":
+                    row, px_um = item[1], item[2]
+                    self._show_section_stats(row, px_um)
+                    self.status.configure(
+                        text=f"{row.get('alias')}: whole section done — "
+                             f"{row.get('pct_sabg')}% SABG (cached for Analyze)")
+                elif kind == "display":
                     self._show_display(item[1])
                 elif kind == "roi":
                     self.roi_rgb, self.roi_px_um = item[1], item[2]
@@ -950,6 +1057,14 @@ class PreviewWindow(tk.Toplevel):
              "(orange 'changed' → green 'up to date'). The Result panel shows %SABG, "
              "thresholds, tissue%, pixel counts and mm² areas. Layers toggles which "
              "overlay masks are drawn / their colour + alpha."),
+            ("Layers (ROI overlay)",
+             "Toggle which overlay masks are drawn and their colour/alpha. They apply "
+             "to the ROI overlay, so the panel is enabled only on the ROI tab."),
+            ("Compute whole section…",
+             "Runs the real full-resolution analysis for the selected section "
+             "(minutes), writes its maps and caches the result. If you then "
+             "'Export → config', clicking Analyze skips this section (config "
+             "unchanged) and renders straight from the cached maps."),
             ("Export → config",
              "Writes the current settings to config.yaml for the batch analyze/export."),
         ])

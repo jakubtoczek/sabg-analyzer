@@ -472,6 +472,76 @@ def _empty_row(scene: SceneInfo, cfg: Config, alias: str | None = None) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# per-section analysis cache (skip recompute when the effective config is unchanged)
+# ---------------------------------------------------------------------------
+# Blocks that affect the NUMBERS (not display/output-only ones). maps_* are
+# included because the maps canvas drives hysteresis connectivity (hd_keep).
+_HASH_BLOCKS = ("process_zoom", "tile_size", "overview_um_per_px", "overview_max_edge",
+                "maps_um_per_px", "maps_max_edge", "tissue", "artifact", "edge",
+                "fold", "detection", "threshold")
+
+
+def _analysis_hash(cfg: Config, key: str) -> str:
+    """SHA-256 of the count-affecting config (+ this scene's override).
+
+    The per-scene ``threshold`` is dropped: `analyze` auto-records the computed
+    threshold back into ``config.yaml`` (the preview's Export does not), so keeping
+    it would make a re-run's hash differ from what was cached. The global
+    ``threshold`` block (method/scale/…) is still hashed, so tuning invalidates the
+    cache; only a hand-set per-scene threshold override is not tracked (use
+    ``--no-cache`` after such a manual edit)."""
+    import hashlib
+    import json
+    snap = _build_config_snapshot(cfg, [])
+    keep = {k: snap[k] for k in _HASH_BLOCKS if k in snap}
+    scene_ov = dict(snap.get("scenes", {}).get(key, {}) or {})
+    scene_ov.pop("threshold", None)
+    keep["scene"] = scene_ov
+    blob = json.dumps(keep, sort_keys=True, default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _cache_path(out_dir: Path, scene: SceneInfo) -> Path:
+    return Path(out_dir) / "cache" / f"{scene.slug}.json"
+
+
+def _write_cache(out_dir: Path, scene: SceneInfo, cfg: Config, row: dict) -> None:
+    """Persist a section's result row + its config hash (best-effort)."""
+    import json
+    p = _cache_path(out_dir, scene)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"hash": _analysis_hash(cfg, scene.key), "row": row},
+                                default=str), encoding="utf-8")
+    except Exception:                                 # caching is never fatal
+        pass
+
+
+def _read_cached_row(out_dir: Path, scene: SceneInfo, cfg: Config) -> dict | None:
+    """The cached row if the sidecar hash matches the current config, else None."""
+    import json
+    p = _cache_path(out_dir, scene)
+    if not p.exists():
+        return None
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if data.get("hash") != _analysis_hash(cfg, scene.key):
+        return None
+    row = data.get("row")
+    return row if isinstance(row, dict) else None
+
+
+def _maps_ready(out_dir: Path, alias: str, cfg: Config) -> bool:
+    """True if a cache hit can be honoured: maps exist for *alias* (so the bundled
+    export can still render) or maps aren't written at all."""
+    if not cfg.output.maps:
+        return True
+    return (Path(out_dir) / "maps" / f"{alias}_tissue.png").exists()
+
+
 def analyze(
     data_dir: str | Path,
     out_dir: str | Path,
@@ -480,6 +550,7 @@ def analyze(
     only_scene: str | None = None,
     show_progress: bool | None = None,
     continue_run: bool = False,
+    use_cache: bool = True,
 ) -> Path:
     import time
     t_start = time.perf_counter()
@@ -501,14 +572,12 @@ def analyze(
                 done_keys = {str(r["key"]) for r in prior_rows}
                 print(f"[analyze] continue: {len(done_keys)} section(s) already done, skipping")
 
-    # Build the work list first so the ETA spans the whole run, not one scene.
-    # Skip sections the config excludes or whose `analyze` cell says "no".
-    plan: list[tuple[Path, SceneInfo]] = []
+    # Candidate sections (after only_scene / config-skip / sections.csv=no). Aliases
+    # are resolved over this whole set so a cache hit can confirm the alias matches.
+    candidates: list[tuple[Path, SceneInfo]] = []
     for path in files:
         for s in czi_io.list_scenes(path):
             if only_scene is not None and s.key != only_scene:
-                continue
-            if s.key in done_keys:
                 continue
             if cfg.scene_skipped(s.key):
                 continue
@@ -516,10 +585,32 @@ def analyze(
             if section_skipped(md):
                 print(f"[analyze] skip {s.key} (sections.csv analyze=no)")
                 continue
-            plan.append((path, s))
+            candidates.append((path, s))
+    aliases = build_aliases([s for _, s in candidates], metadata, cfg.alias)
 
-    # Short alias per section from the metadata (used in results + filenames).
-    aliases = build_aliases([s for _, s in plan], metadata, cfg.alias)
+    # Split into work (plan) vs cache hits: a section is skipped when its sidecar
+    # hash matches the current config AND its maps are on disk (so export still works).
+    # The ETA then spans only the planned (recomputed) sections.
+    plan: list[tuple[Path, SceneInfo]] = []
+    cached_rows: list[dict] = []
+    for path, s in candidates:
+        if s.key in done_keys:
+            continue
+        alias = aliases.get(s.key, s.slug)
+        if use_cache:
+            cached = _read_cached_row(out_dir, s, cfg)
+            if (cached is not None and str(cached.get("alias")) == alias
+                    and _maps_ready(out_dir, alias, cfg)):
+                row = dict(cached)
+                if metadata:
+                    md = metadata.get((s.file_stem, s.scene_index), {})
+                    for c in LABEL_COLUMNS:
+                        row[c] = md.get(c, "")
+                cached_rows.append(row)
+                print(f"[analyze] cache hit {s.key} [{alias}] (config unchanged), skipping")
+                continue
+        plan.append((path, s))
+    prior_rows.extend(cached_rows)            # written alongside resumed/new rows
 
     if show_progress is None:
         show_progress = sys.stdout.isatty()
@@ -554,6 +645,7 @@ def analyze(
                         for c in LABEL_COLUMNS:
                             row[c] = md.get(c, "")
                     rows.append(row)
+                    _write_cache(out_dir, s, cfg, row)   # enables skip-on-reanalyze
                     _checkpoint()
     finally:
         bar.close()
