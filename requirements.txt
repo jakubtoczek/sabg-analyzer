@@ -5,5 +5,5 @@ scikit-image>=0.22   # color deconvolution, triangle/otsu thresholds, morphology
 numpy>=1.24
 opencv-python>=4.8   # fast resize / morphology
 pandas>=2.0          # results & sections tables
-matplotlib>=3.7      # debug figures
+matplotlib>=3.7      # debug figures + the Preview/Tune GUI canvas (sabg_preview_gui.py)
 PyYAML>=6.0          # config files
