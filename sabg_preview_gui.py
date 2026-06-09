@@ -36,8 +36,10 @@ import sabg_gui_widgets as gw
 from sabg_analyzer import export, overlay, preview
 from sabg_analyzer.config import load_config
 
-_VIEW_MULTS = ["1×", "2×", "4×", "8×"]
-_SB_POS = {"BR": "br", "BL": "bl", "TR": "tr", "TL": "tl"}
+_VIEW_MULTS = [1, 2, 4, 8]          # thumb-resolution multipliers for the px/µm picker
+# Scale-bar corner labels (clear) -> the export.draw_scalebar position codes.
+_SB_POS = {"bottom-right": "br", "bottom-left": "bl",
+           "top-right": "tr", "top-left": "tl"}
 
 
 # ---------------------------------------------------------------------------
@@ -123,10 +125,12 @@ class PreviewWindow(tk.Toplevel):
 
         self.manual_auto = tk.BooleanVar(value=True)       # auto threshold on ROI
         self.manual_thr = tk.StringVar(value="")
-        self.view_mult = tk.StringVar(value="1×")          # supersedes gui.preview_hi_res
+        self.view_res = tk.StringVar()                     # px/µm label (supersedes gui.preview_hi_res)
+        self._res_to_mult: dict[str, int] = {}             # label -> thumb multiplier
+        self._loaded_um: float | None = None               # achieved µm/px of the shown image
         self.sb_len = tk.StringVar(value="Auto")           # scale-bar length (µm)
         self.sb_label = tk.BooleanVar(value=True)
-        self.sb_pos = tk.StringVar(value="BR")
+        self.sb_pos = tk.StringVar(value="bottom-right")
         self.show_vars: dict[str, tk.BooleanVar] = {}
         self.field_vars: dict[tuple[str, str], tk.Variable] = {}
         self._photo_refs: list[tk.PhotoImage] = []         # keep picker thumbs alive
@@ -173,9 +177,12 @@ class PreviewWindow(tk.Toplevel):
         self.btn_open.pack(side="left", padx=2)
         tk.Button(bar, text="Clear ROI", command=self.clear_roi).pack(side="left", padx=2)
         tk.Button(bar, text="Reset view", command=lambda: self.thumb_nav.reset()).pack(side="left", padx=2)
-        tk.Label(bar, text="View ×").pack(side="left", padx=(12, 0))
-        ttk.OptionMenu(bar, self.view_mult, "1×", *_VIEW_MULTS,
+        tk.Label(bar, text="resolution").pack(side="left", padx=(12, 0))
+        labels = self._res_labels()
+        ttk.OptionMenu(bar, self.view_res, labels[0], *labels,
                        command=lambda _v: self._reload_display()).pack(side="left")
+        self.res_label = tk.Label(bar, text="loaded: —", fg="#557", font=("Segoe UI", 8))
+        self.res_label.pack(side="left", padx=(8, 0))
 
         self.thumb_fig = Figure(figsize=(6, 6), tight_layout=True)
         self.thumb_ax = self.thumb_fig.add_subplot(111)
@@ -200,7 +207,7 @@ class PreviewWindow(tk.Toplevel):
         ttk.OptionMenu(bar, self.sb_len, "Auto", "Auto", "50", "100", "200",
                        "500", "1000").pack(side="left")
         tk.Checkbutton(bar, text="label", variable=self.sb_label).pack(side="left")
-        ttk.OptionMenu(bar, self.sb_pos, "BR", *_SB_POS.keys()).pack(side="left")
+        ttk.OptionMenu(bar, self.sb_pos, "bottom-right", *_SB_POS.keys()).pack(side="left")
         tk.Button(bar, text="Close ROI", command=self.clear_roi).pack(side="left", padx=(10, 2))
 
         self.roi_fig = Figure(figsize=(6, 6), tight_layout=True)
@@ -232,6 +239,14 @@ class PreviewWindow(tk.Toplevel):
         self.dirty_dot = tk.Label(top, text="●", fg="#bbb", font=("Segoe UI", 12))
         self.dirty_dot.pack(side="left", padx=4)
         tk.Button(top, text="Export → config", command=self.on_export).pack(side="left", padx=2)
+
+        # result characteristics (filled after each recompute / whole-section run)
+        res = tk.LabelFrame(body, text="Result", padx=6, pady=4)
+        res.pack(fill="x", padx=6, pady=2)
+        self.stats_label = tk.Label(res, text="(recompute to see %SABG, thresholds, areas)",
+                                    anchor="w", justify="left", font=("Consolas", 9),
+                                    fg="#333")
+        self.stats_label.pack(fill="x")
 
         # threshold override
         thr = tk.LabelFrame(body, text="Seed threshold", padx=6, pady=4)
@@ -273,11 +288,28 @@ class PreviewWindow(tk.Toplevel):
         self.nb.select(0)
         self._reload_display()
 
+    def _res_labels(self) -> list[str]:
+        """px/µm picker labels (one per thumb multiplier) + fill ``_res_to_mult``.
+
+        Thumb resolution is ``cfg.thumb_um_per_px``; finer multipliers read the
+        section at proportionally smaller µm/px (×2 -> half the µm/px).
+        """
+        self._res_to_mult.clear()
+        labels: list[str] = []
+        for m in _VIEW_MULTS:
+            um = self.cfg.thumb_um_per_px / m
+            lab = f"{um:g} µm/px" + ("  (thumb)" if m == 1 else "")
+            labels.append(lab)
+            self._res_to_mult[lab] = m
+        if not self.view_res.get():
+            self.view_res.set(labels[0])
+        return labels
+
     def _reload_display(self) -> None:
         """(Re)load the section's display image for ROI drawing (thumb or finer)."""
         if self.entry is None:
             return
-        mult = int(self.view_mult.get().rstrip("×"))
+        mult = self._res_to_mult.get(self.view_res.get(), 1)
         if mult <= 1:
             try:
                 bgr = cv2.imread(str(self.entry.thumb_path), cv2.IMREAD_COLOR)
@@ -305,6 +337,15 @@ class PreviewWindow(tk.Toplevel):
         self.thumb_ax.imshow(rgb)
         title = "drag a ROI" if self.roi_rgb is None else "ROI fixed — Clear ROI to redraw"
         self.thumb_ax.set_title(f"{self.entry.alias} — {title}", fontsize=9)
+        # Achieved µm/px: the display spans the whole scene bbox, so it's the
+        # section's pixel size scaled by (full-res width / displayed width).
+        sc = self.entry.scene
+        if sc.pixel_size_um and rgb.shape[1]:
+            self._loaded_um = sc.pixel_size_um * sc.w / rgb.shape[1]
+            self.res_label.configure(text=f"loaded: {self._loaded_um:.3g} µm/px")
+        else:
+            self._loaded_um = None
+            self.res_label.configure(text="loaded: —")
         self.thumb_canvas.draw_idle()
         self.thumb_nav.set_home()
         self.selector.set_active(self.roi_rgb is None)
@@ -496,7 +537,32 @@ class PreviewWindow(tk.Toplevel):
         self.status.configure(
             text=f"%SABG={pct:.2f}  thr={lay['thr']:.4f}  "
                  f"tissue={100*t.mean():.1f}%  fold={100*lay['fold'].mean():.1f}%")
+        self._show_stats(lay, self.roi_px_um, scope="ROI")
         self._redraw()
+
+    def _show_stats(self, lay: dict, px_um: float | None, scope: str = "ROI") -> None:
+        """Fill the Result panel with the key characteristics of *lay*."""
+        t = lay["tissue"]
+        tissue_px = int(t.sum())
+        sabg_px = int(lay["sabg"].sum())
+        fold_px = int(lay["fold"].sum())
+        art_px = int(lay["artifact"].sum())
+        edge_px = int(lay["edge_removed"].sum())
+        pct = 100.0 * sabg_px / tissue_px if tissue_px else 0.0
+        thr_s = lay.get("thr_s")
+        thr_line = f"thr {lay['thr']:.4f}" + (f"   2nd {thr_s:.4f}" if thr_s else "")
+        lines = [f"{scope}   %SABG = {pct:.2f}", thr_line,
+                 f"tissue {100*t.mean():.1f}% of {scope.lower()}"]
+        if px_um:
+            mm2 = (px_um / 1000.0) ** 2
+            lines.append(f"SABG+  {sabg_px:>12,} px  {sabg_px*mm2:.4f} mm²")
+            lines.append(f"tissue {tissue_px:>12,} px  {tissue_px*mm2:.3f} mm²")
+        else:
+            lines.append(f"SABG+  {sabg_px:,} px   tissue {tissue_px:,} px")
+        lines.append(f"fold {100*lay['fold'].mean():.1f}%  "
+                     f"artifact {100*lay['artifact'].mean():.1f}%  "
+                     f"edge-rej {100*lay['edge_removed'].mean():.1f}%")
+        self.stats_label.configure(text="\n".join(lines))
 
     def _composite(self) -> np.ndarray | None:
         if self.roi_rgb is None or self.layers is None:

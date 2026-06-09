@@ -172,11 +172,18 @@ class ConfigWindow(tk.Toplevel):
         self.minsize(460, 560)
 
         self.cfg_path = Path(config_path)
-        src = self.cfg_path if self.cfg_path.exists() else (
-            Path(example_path) if example_path and Path(example_path).exists() else None)
-        self.cfg = load_config(str(src) if src else None)
+        self.example_path = example_path
         self.field_vars: dict[tuple[str, str], tk.Variable] = {}
         self.show_vars: dict[str, tk.BooleanVar] = {}
+        self._build()
+
+    def _build(self) -> None:
+        src = self.cfg_path if self.cfg_path.exists() else (
+            Path(self.example_path) if self.example_path
+            and Path(self.example_path).exists() else None)
+        self.cfg = load_config(str(src) if src else None)
+        self.field_vars.clear()
+        self.show_vars.clear()
 
         btns = tk.Frame(self, padx=6, pady=6)
         btns.pack(fill="x")
@@ -184,24 +191,32 @@ class ConfigWindow(tk.Toplevel):
                   command=self.on_save).pack(side="left")
         tk.Button(btns, text="Open config.yaml",
                   command=lambda: _open_file(self.cfg_path)).pack(side="left", padx=6)
+        tk.Button(btns, text="Reload", command=self._reload).pack(side="left")
 
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True)
 
         t1 = gw.ScrollFrame(nb)
         nb.add(t1, text="Detection tuning")
+        # Layers at the TOP of the tab (Jakub expects the overlay layers up there);
+        # fill="x" (no expand) so the frame doesn't balloon and leave a gap.
+        lay = tk.LabelFrame(t1.interior, text="Overlay layers (colour / alpha)",
+                            padx=4, pady=2)
+        lay.pack(fill="x", pady=2)
+        gw.build_layers_panel(lay, self.cfg, self.show_vars, lambda: None)
         gw.build_groups(t1.interior, self.cfg, gw.DETECTION_GROUPS, self.field_vars,
                         self._on_field, recompute=False,
                         opened={"1. Tissue", "4. SABG detection"})
-        lay = tk.LabelFrame(t1.interior, text="Overlay layers (colour / alpha)",
-                            padx=4, pady=2)
-        lay.pack(fill="x", expand=True, pady=2)
-        gw.build_layers_panel(lay, self.cfg, self.show_vars, lambda: None)
 
         t2 = gw.ScrollFrame(nb)
         nb.add(t2, text="Other settings")
         gw.build_groups(t2.interior, self.cfg, gw.OTHER_GROUPS, self.field_vars,
                         self._on_field, recompute=False)
+
+    def _reload(self) -> None:
+        for w in list(self.children.values()):
+            w.destroy()
+        self._build()
 
     def _on_field(self, section, attr, kind, _recompute) -> None:
         gw.apply_field(self.cfg, section, attr, kind, self.field_vars[(section, attr)])

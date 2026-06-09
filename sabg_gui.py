@@ -106,8 +106,8 @@ class App:
         right.pack(side="right")
 
         for name, cmd in (("Scan", self.on_scan), ("Info", self.on_info),
-                          ("Analyze", self.on_analyze), ("Export", self.on_export),
-                          ("Preview", self.on_preview)):
+                          ("Preview", self.on_preview), ("Analyze", self.on_analyze),
+                          ("Export", self.on_export)):
             b = tk.Button(left, text=name, width=9, command=cmd)
             b.pack(side="left", padx=3, pady=4)
             self.btn[name] = b
