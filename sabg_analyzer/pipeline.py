@@ -605,6 +605,7 @@ def _build_config_snapshot(cfg: Config, rows: list[dict]) -> dict:
                    "fill_holes_max_frac": cfg.tissue.fill_holes_max_frac,
                    "bg_max_tissue_frac": cfg.tissue.bg_max_tissue_frac,
                    "fill_interior_holes": cfg.tissue.fill_interior_holes,
+                   "interior_hole_min_tissue_frac": cfg.tissue.interior_hole_min_tissue_frac,
                    "interior_hole_max_frac": cfg.tissue.interior_hole_max_frac},
         "artifact": {"enabled": cfg.artifact.enabled,
                      "dark_level": cfg.artifact.dark_level,

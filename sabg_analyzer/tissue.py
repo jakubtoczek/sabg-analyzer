@@ -47,9 +47,13 @@ class TissueParams:
     fill_holes_max_frac: float = 0.0012  # fill enclosed non-tissue holes up to this frame fraction
     bg_max_tissue_frac: float = 0.97  # if adaptive keeps more than this, retry with a stricter bg
     # Reclaim faint interior tissue wrongly dropped as glass (enclosed holes inside the
-    # tissue blob). A hole is FILLED regardless of size UNLESS it looks like genuine glass
-    # (bright low-sat, or uniformly bg-coloured + non-teal + smooth) or a black mosaic gap.
+    # tissue blob). A hole is FILLED only when it shows POSITIVE tissue evidence -- a
+    # meaningful fraction of its pixels are textured (local std >= texture_min) OR teal
+    # (opponent >= bg_teal_guard). Smooth non-teal glass and black mosaic gaps carry no
+    # such evidence, so they stay open.
     fill_interior_holes: bool = False
+    interior_hole_min_tissue_frac: float = 0.10  # fill a hole only if >= this fraction of
+                                                 # its pixels are textured or teal (tissue)
     interior_hole_max_frac: float = 0.02  # upper guard: never fill a hole bigger than this
                                           # frame fraction (protects large enclosed glass)
 
@@ -210,44 +214,33 @@ def _fill_interior_holes_guarded(m: np.ndarray, rgb: np.ndarray,
     """Reclaim faint interior tissue that the glass tests wrongly dropped.
 
     Faint near-glass tissue gets classified as glass by the *adaptive* test and
-    becomes an enclosed hole inside the tissue blob. This fills such holes
-    regardless of size, leaving open only those that look like something we must
-    NOT count: per pixel a hole is "kept open" when it is
+    becomes an enclosed hole inside the tissue blob. An enclosed (non-border) hole
+    is filled only when it shows POSITIVE tissue evidence: at least
+    ``interior_hole_min_tissue_frac`` of its pixels are either *textured* (local std
+    >= ``texture_min``) or *teal* (opponent score >= ``bg_teal_guard``). Smooth,
+    non-teal glass and black mosaic gaps carry no such evidence, so they stay open --
+    this is the inverse of the old "fill unless it clearly looks like glass" guard,
+    which absorbed faint real glass for merely lacking glass evidence.
 
-      (a) a black mosaic gap (unsampled), or
-      (b) bright low-saturation glass (the fixed white test), or
-      (c) uniformly glass-coloured: close to the estimated bg, non-teal, and very
-          smooth (a STRICTER version of the per-pixel adaptive test, so genuinely
-          uniform glass stays open while slightly-textured faint tissue is filled).
-
-    A hole is filled only if fewer than half its pixels are kept-open and it is no
-    larger than ``interior_hole_max_frac`` of the frame (an upper guard against
-    re-absorbing large enclosed glass lakes). Border-touching holes (the exterior
-    glass margin) are never filled.
+    The hole must also be no larger than ``interior_hole_max_frac`` of the frame (an
+    upper guard against re-absorbing large enclosed glass lakes). Border-touching
+    holes (the exterior glass margin) are never filled. ``bg`` is unused now that the
+    fill keys off tissue evidence rather than proximity to the estimated glass colour.
     """
     m = m.astype(np.uint8)
     H, W = m.shape
-    rgb_i = rgb.astype(np.int16)
-    maxc = rgb_i.max(axis=2)
-    minc = rgb_i.min(axis=2)
-    bright = maxc / 255.0
-    sat = np.where(maxc > 0, (maxc - minc) / np.maximum(maxc, 1), 0.0)
-    keep_open = (maxc <= p.gap_level) | ((bright >= p.white_level) & (sat <= p.sat_min))
-    if p.adaptive and bg is not None:
-        from .scoring import opponent_score
-        a = rgb.astype(np.float32) / 255.0
-        dist = np.sqrt(((a - bg.reshape(1, 1, 3)) ** 2).sum(axis=2))
-        unstained = opponent_score(rgb) < p.bg_teal_guard
-        w = max(3, int(p.texture_win) | 1)
-        g = a.mean(axis=2)
-        mb = cv2.blur(g, (w, w))
-        lstd = np.sqrt(np.clip(cv2.blur(g * g, (w, w)) - mb * mb, 0.0, None))
-        glass_strict = ((dist <= 0.6 * p.bg_margin) & unstained
-                        & (lstd < 0.6 * p.texture_min))
-        keep_open = keep_open | glass_strict
+    from .scoring import opponent_score
+    a = rgb.astype(np.float32) / 255.0
+    g = a.mean(axis=2)
+    win = max(3, int(p.texture_win) | 1)
+    mb = cv2.blur(g, (win, win))
+    lstd = np.sqrt(np.clip(cv2.blur(g * g, (win, win)) - mb * mb, 0.0, None))
+    opponent = opponent_score(rgb)
+    tissue_evidence = (lstd >= p.texture_min) | (opponent >= p.bg_teal_guard)
 
     max_px = (int(p.interior_hole_max_frac * m.size)
               if p.interior_hole_max_frac > 0 else m.size)
+    min_frac = max(0.0, float(p.interior_hole_min_tissue_frac))
     n, lab, st, _ = cv2.connectedComponentsWithStats((1 - m).astype(np.uint8), 8)
     for i in range(1, n):
         x, y, w, h, area = st[i]
@@ -256,7 +249,7 @@ def _fill_interior_holes_guarded(m: np.ndarray, rgb: np.ndarray,
         if area > max_px:
             continue                                  # too large: likely real glass
         comp = (lab == i)
-        if float(keep_open[comp].mean()) < 0.5:       # predominantly tissue -> reclaim
+        if float(tissue_evidence[comp].mean()) >= min_frac:   # tissue evidence -> reclaim
             m[comp] = 1
     return m.astype(bool)
 
