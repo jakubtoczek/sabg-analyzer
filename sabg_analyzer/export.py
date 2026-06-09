@@ -84,11 +84,13 @@ class ExportParams:
 # Scale bar
 # ---------------------------------------------------------------------------
 def draw_scalebar(img: np.ndarray, pixel_size_um: float, bar_um: float,
-                  color=(0, 0, 0), label: bool = True) -> np.ndarray:
-    """Burn a filled scale bar into the bottom-right corner.
+                  color=(0, 0, 0), label: bool = True,
+                  position: str = "br") -> np.ndarray:
+    """Burn a filled scale bar into a corner of the image.
 
     With *label* (default) the "<bar_um> µm" text is drawn above the bar;
-    set it False for a bare bar.
+    set it False for a bare bar. *position* is one of ``br``/``bl``/``tr``/``tl``
+    (bottom/top + right/left); the default ``br`` is the original behaviour.
     """
     out = img.copy()
     h, w = out.shape[:2]
@@ -96,11 +98,21 @@ def draw_scalebar(img: np.ndarray, pixel_size_um: float, bar_um: float,
     bar_px = min(bar_px, int(w * 0.8))
     bar_h = max(3, int(round(h * 0.012)))
     m = int(round(min(h, w) * 0.05))
-    x2, y2 = w - m, h - m
-    x1, y1 = x2 - bar_px, y2 - bar_h
+    label_h = int(h * 0.035) if label else 0
+    pos = position.lower()
+    right = pos.endswith("r")
+    bottom = pos.startswith("b")
+    x1 = (w - m - bar_px) if right else m
+    x2 = x1 + bar_px
+    if bottom:
+        y2 = h - m
+        y1 = y2 - bar_h
+    else:
+        y1 = m + label_h
+        y2 = y1 + bar_h
 
     # white plate behind for contrast (taller when a label sits above the bar)
-    plate_top = y1 - (int(h * 0.035) if label else 0)
+    plate_top = y1 - label_h
     cv2.rectangle(out, (x1 - 6, plate_top - 6), (x2 + 6, y2 + 6),
                   (255, 255, 255), -1)
     cv2.rectangle(out, (x1, y1), (x2, y2), color, -1)

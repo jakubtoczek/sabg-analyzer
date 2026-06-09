@@ -3,16 +3,17 @@
 Opened from the main GUI's *Preview* button. Flow:
 
   1. Pick a section thumbnail (left); thumbs are sized proportional to physical size.
-  2. Drag a rectangle on it to choose a ROI (capped at gui.preview_roi_cap_um).
-  3. *Open ROI* reads that crop at full resolution.
-  4. Tune every detection setting live in the right-hand panel (grouped in pipeline
-     order); each mask is recomputed in-process via `sabg_analyzer.preview` — the SAME
-     mask math as the batch analysis — and drawn over the ROI.
-  5. *Export → config.yaml* writes the chosen settings so they propagate to the other
-     sections and the batch run.
+  2. *Draw ROI* and drag a rectangle on the Thumbnail tab (capped at gui.preview_roi_cap_um).
+  3. *Open ROI* reads that crop at full resolution into the ROI tab.
+  4. Tune every detection setting live in the right-hand panel (collapsible groups in
+     pipeline order); each mask is recomputed in-process via `sabg_analyzer.preview` —
+     the SAME mask math as the batch analysis — and drawn over the ROI.
+  5. *Save* exports the current ROI overlay as a PNG with a scale bar burned in;
+     *Export → config.yaml* writes the chosen settings for the batch run.
 
-Heavy CZI reads and the per-change recompute run on a worker thread; results come
-back through a queue drained on the Tk main loop, so the window stays responsive.
+Canvas navigation is mouse-only: wheel zooms to the cursor, middle/right drag pans,
+*Reset view* restores the full extent. Heavy CZI reads and the per-change recompute
+run on a worker thread; results come back through a queue drained on the Tk main loop.
 """
 
 from __future__ import annotations
@@ -23,151 +24,82 @@ from dataclasses import replace
 from pathlib import Path
 
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 import cv2
 import numpy as np
-from matplotlib.backends.backend_tkagg import (FigureCanvasTkAgg,
-                                               NavigationToolbar2Tk)
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 from matplotlib.widgets import RectangleSelector
 
-from sabg_analyzer import overlay, preview
+import sabg_gui_widgets as gw
+from sabg_analyzer import export, overlay, preview
 from sabg_analyzer.config import load_config
 
+_VIEW_MULTS = ["1×", "2×", "4×", "8×"]
+_SB_POS = {"BR": "br", "BL": "bl", "TR": "tr", "TL": "tl"}
+
 
 # ---------------------------------------------------------------------------
-# tooltips
+# mouse-only canvas navigation (replaces NavigationToolbar2Tk)
 # ---------------------------------------------------------------------------
-class _Tooltip:
-    """A lightweight hover tooltip for any widget."""
+class CanvasNav:
+    """Wheel-zoom-to-cursor + middle/right-drag pan on one matplotlib axes."""
 
-    def __init__(self, widget: tk.Widget, text: str) -> None:
-        self.widget = widget
-        self.text = text
-        self._tip: tk.Toplevel | None = None
-        widget.bind("<Enter>", self._show)
-        widget.bind("<Leave>", self._hide)
+    def __init__(self, canvas: FigureCanvasTkAgg, ax) -> None:
+        self.canvas = canvas
+        self.ax = ax
+        self._home: tuple | None = None
+        self._panning = False
+        canvas.mpl_connect("scroll_event", self._zoom)
+        canvas.mpl_connect("button_press_event", self._press)
+        canvas.mpl_connect("motion_notify_event", self._drag)
+        canvas.mpl_connect("button_release_event", self._release)
 
-    def _show(self, _evt=None) -> None:
-        if self._tip or not self.text:
+    def set_home(self) -> None:
+        self._home = (self.ax.get_xlim(), self.ax.get_ylim())
+
+    def clear_home(self) -> None:
+        self._home = None
+
+    def reset(self) -> None:
+        if self._home is not None:
+            self.ax.set_xlim(*self._home[0])
+            self.ax.set_ylim(*self._home[1])
+            self.canvas.draw_idle()
+
+    def _zoom(self, e) -> None:
+        if e.inaxes is not self.ax or e.xdata is None:
             return
-        x = self.widget.winfo_rootx() + 18
-        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
-        self._tip = tk.Toplevel(self.widget)
-        self._tip.wm_overrideredirect(True)
-        self._tip.wm_geometry(f"+{x}+{y}")
-        tk.Label(self._tip, text=self.text, justify="left", background="#ffffe0",
-                 relief="solid", borderwidth=1, wraplength=320,
-                 font=("Segoe UI", 8)).pack(ipadx=4, ipady=2)
+        scale = 0.8 if e.button == "up" else 1.25      # wheel up = zoom in
+        x0, x1 = self.ax.get_xlim()
+        y0, y1 = self.ax.get_ylim()
+        xd, yd = e.xdata, e.ydata
+        self.ax.set_xlim(xd - (xd - x0) * scale, xd + (x1 - xd) * scale)
+        self.ax.set_ylim(yd - (yd - y0) * scale, yd + (y1 - yd) * scale)
+        self.canvas.draw_idle()
 
-    def _hide(self, _evt=None) -> None:
-        if self._tip:
-            self._tip.destroy()
-            self._tip = None
+    def _press(self, e) -> None:
+        if e.button in (2, 3) and e.inaxes is self.ax:
+            self.ax.start_pan(e.x, e.y, 1)             # button 1 => plain pan
+            self._panning = True
 
+    def _drag(self, e) -> None:
+        if self._panning:
+            self.ax.drag_pan(1, e.key, e.x, e.y)
+            self.canvas.draw_idle()
 
-# ---------------------------------------------------------------------------
-# tuning-panel spec — fields grouped in pipeline order. Each field is
-# (section, attr, kind, label, tooltip[, choices]). `section` is the Config sub-
-# object name ("" for a top-level Config attr). kind: bool|int|float|choice.
-# ---------------------------------------------------------------------------
-TISSUE_FIELDS = [
-    ("tissue", "gap_level", "int", "gap_level", "max(R,G,B) <= this is an unsampled black mosaic gap (not tissue)."),
-    ("tissue", "white_level", "float", "white_level", "Brightness (0-1) above this AND low saturation = white glass."),
-    ("tissue", "sat_min", "float", "sat_min", "Saturation below this (with high brightness) = white glass."),
-    ("tissue", "adaptive", "bool", "adaptive", "Also remove pale/tinted glass the fixed white test misses."),
-    ("tissue", "bg_margin", "float", "bg_margin", "RGB distance (0-1) within which a pixel matches the estimated glass colour."),
-    ("tissue", "bg_bright_quantile", "float", "bg_bright_quantile", "Glass colour = median of the brightest this-fraction of pixels."),
-    ("tissue", "bg_teal_guard", "float", "bg_teal_guard", "Opponent score above this is kept as tissue (never glass)."),
-    ("tissue", "texture_min", "float", "texture_min", "Local std above this = textured = tissue (lower = more sensitive)."),
-    ("tissue", "texture_win", "int", "texture_win", "Window (px) for the local-std texture estimate (wider = fewer interior holes)."),
-    ("tissue", "close_px", "int", "close_px", "Morphological close to solidify textured tissue (overview px)."),
-    ("tissue", "min_object_px", "int", "min_object_px", "Remove tissue specks smaller than this (overview px)."),
-    ("tissue", "fill_holes_max_frac", "float", "fill_holes_max_frac", "Fill enclosed non-tissue holes up to this frame fraction (de-speckle)."),
-    ("tissue", "fill_interior_holes", "bool", "fill_interior_holes", "Reclaim faint interior tissue dropped as glass (fill enclosed holes unless they look like glass/gap)."),
-    ("tissue", "interior_hole_max_frac", "float", "interior_hole_max_frac", "Upper guard: never fill an interior hole bigger than this frame fraction."),
-    ("tissue", "bg_max_tissue_frac", "float", "bg_max_tissue_frac", "If adaptive keeps more than this, retry with a stricter glass estimate."),
-    ("artifact", "erode_px", "int", "border erode_px", "Erode the tissue border by this many overview px (drops edge halos). [artifact.erode_px]"),
-]
-ARTIFACT_FIELDS = [
-    ("artifact", "enabled", "bool", "enabled", "Flag dark, non-teal fold/debris pixels and exclude them."),
-    ("artifact", "dark_level", "float", "dark_level", "max(R,G,B)/255 below this = suspiciously dark."),
-    ("artifact", "teal_min", "float", "teal_min", "Opponent score above this = real teal -> keep (not artifact)."),
-    ("artifact", "min_object_px", "int", "min_object_px", "Drop dark components smaller than this (keeps tiny specks countable)."),
-]
-FOLD_FIELDS = [
-    ("fold", "enabled", "bool", "enabled", "Detect thin linear ridges (tissue folds)."),
-    ("fold", "source", "choice", "source", "density = ridges of tissue OD excess; sabg = ridges of SABG+ density.", ["density", "sabg"]),
-    ("fold", "hp_um", "float", "hp_um", "High-pass scale (µm) for the density excess."),
-    ("fold", "border_um", "float", "border_um", "Interior margin (µm) excluded from fold finding."),
-    ("fold", "combine", "choice", "combine", "How ridge + coherence responses are combined.", ["product", "agreement", "union", "frangi_only"]),
-    ("fold", "smooth_um", "float", "smooth_um", "Smoothing (µm) before ridge detection."),
-    ("fold", "min_length_um", "float", "min_length_um", "Minimum ridge length (µm)."),
-    ("fold", "max_width_um", "float", "max_width_um", "Maximum ridge width (µm)."),
-    ("fold", "min_aspect", "float", "min_aspect", "Minimum length/width aspect ratio."),
-    ("fold", "ecc_min", "float", "ecc_min", "Minimum eccentricity (elongation) of a fold component."),
-    ("fold", "band_width_um", "float", "band_width_um", "Dilate detected ridges into a band this wide (µm)."),
-    ("fold", "ridge_min", "float", "ridge_min", "Minimum ridge-filter response."),
-    ("fold", "coherence_min", "float", "coherence_min", "Minimum structure-tensor coherence."),
-    ("fold", "score_min", "float", "score_min", "Minimum combined score."),
-    ("fold", "exclude_from_tissue", "bool", "exclude_from_tissue", "Exclude the fold band from countable tissue (denominator)."),
-]
-DETECT_FIELDS = [
-    ("detection", "primary", "choice", "primary", "Primary SABG score.", ["deconvolution", "opponent"]),
-    ("detection", "require_agreement", "bool", "require_agreement", "SABG+ only where BOTH scores clear their thresholds."),
-    ("threshold", "method", "choice", "threshold.method", "Auto-threshold method on the tissue histogram.", ["triangle", "otsu", "percentile", "fixed"]),
-    ("threshold", "scale", "float", "threshold.scale", "Seed/high threshold = auto-threshold x this (raise to be stricter)."),
-    ("threshold", "percentile", "float", "threshold.percentile", "Percentile (when method=percentile)."),
-    ("threshold", "min_score", "float", "threshold.min_score", "Clamp the threshold to at least this."),
-    ("detection", "hysteresis", "bool", "hysteresis", "Grow each seed into the connected faint teal around it."),
-    ("detection", "hyst_low_scale", "float", "hyst_low_scale", "Grow/low threshold = seed threshold x this (lower = grow further)."),
-    ("detection", "hyst_teal_min", "float", "hyst_teal_min", "Only grow into pixels at least this teal (opponent)."),
-    ("detection", "expand_px", "int", "expand_px", "Dilate the final positive mask by this many px."),
-    ("detection", "expand_teal_min", "float", "expand_teal_min", "Only expand into pixels this teal (0 = any tissue)."),
-    ("detection", "auto_estimate", "bool", "auto_estimate", "Estimate the SABG stain direction from this ROI's most-teal tissue."),
-]
-EDGE_FIELDS = [
-    ("edge", "enabled", "bool", "enabled", "Reject thin edge-shadow rims from positives."),
-    ("edge", "morph_open", "bool", "morph_open", "Drop structures thinner than min_width_um by morphological opening."),
-    ("edge", "min_width_um", "float", "min_width_um", "Minimum positive structure width (µm)."),
-    ("edge", "reject_shadow", "bool", "reject_shadow", "Reject dark + achromatic shadow pixels."),
-    ("edge", "shadow_dark_level", "float", "shadow_dark_level", "Brightness below this counts as shadow-dark."),
-    ("edge", "shadow_sat_min", "float", "shadow_sat_min", "Saturation below this counts as achromatic."),
-    ("edge", "teal_keep", "float", "teal_keep", "Protect clearly-teal pixels (opponent >= this) from edge rejection."),
-]
-OVERLAY_FIELDS = [   # redraw-only (no recompute)
-    ("overlay", "sabg_alpha", "float", "sabg_alpha", "SABG+ overlay opacity."),
-    ("overlay", "artifact_alpha", "float", "artifact_alpha", "Artifact overlay opacity."),
-    ("overlay", "fold_alpha", "float", "fold_alpha", "Fold-band overlay opacity."),
-    ("overlay", "edge_alpha", "float", "edge_alpha", "Edge-rejected overlay opacity."),
-    ("overlay", "nontissue_alpha", "float", "nontissue_alpha", "Non-tissue shade opacity."),
-]
-
-GROUPS = [
-    ("1. Tissue", TISSUE_FIELDS, True),
-    ("2. Artifact / dark folds", ARTIFACT_FIELDS, True),
-    ("3. Fold (linear ridges)", FOLD_FIELDS, True),
-    ("4. SABG detection", DETECT_FIELDS, True),
-    ("5. Edge-shadow rejection", EDGE_FIELDS, True),
-    ("6. Overlay appearance", OVERLAY_FIELDS, False),   # redraw only
-]
-
-# layers drawn in pipeline order: (key, overlay-color attr, default show)
-LAYER_SPEC = [
-    ("nontissue", "nontissue_color", True),
-    ("artifact", "artifact_color", True),
-    ("fold", "fold_color", True),
-    ("sabg", "sabg_color", True),
-    ("edge_removed", "edge_color", True),
-]
+    def _release(self, e) -> None:
+        if self._panning:
+            self.ax.end_pan()
+            self._panning = False
 
 
 class PreviewWindow(tk.Toplevel):
     def __init__(self, master, data_dir: str, out_dir: str, config_path: str) -> None:
         super().__init__(master)
         self.title("SABG Preview / Tune")
-        self.geometry("1280x820")
+        self.geometry("1320x840")
         self.minsize(1040, 640)
 
         self.data_dir = data_dir
@@ -187,13 +119,18 @@ class PreviewWindow(tk.Toplevel):
         self.roi_rect: tuple[int, int, int, int] | None = None   # full-res (x,y,w,h)
         self.layers: dict | None = None
         self._sel_extents = None                           # last rectangle (thumb px)
+        self._setting_extents = False                      # guard for programmatic clamp
 
         self.manual_auto = tk.BooleanVar(value=True)       # auto threshold on ROI
         self.manual_thr = tk.StringVar(value="")
-        self.hi_res = tk.BooleanVar(value=self.cfg.gui.preview_hi_res)
+        self.view_mult = tk.StringVar(value="1×")          # supersedes gui.preview_hi_res
+        self.sb_len = tk.StringVar(value="Auto")           # scale-bar length (µm)
+        self.sb_label = tk.BooleanVar(value=True)
+        self.sb_pos = tk.StringVar(value="BR")
         self.show_vars: dict[str, tk.BooleanVar] = {}
         self.field_vars: dict[tuple[str, str], tk.Variable] = {}
         self._photo_refs: list[tk.PhotoImage] = []         # keep picker thumbs alive
+        self._dirty = False
 
         self._build_layout()
         self._populate_picker()
@@ -202,56 +139,102 @@ class PreviewWindow(tk.Toplevel):
 
     # -- layout ------------------------------------------------------------
     def _build_layout(self) -> None:
-        # left: picker (scrollable) | center: figure | right: tuning (scrollable)
-        left = tk.Frame(self, width=180)
+        # left: picker (scroll) | center: notebook of canvases | right: tuning (scroll)
+        left = tk.Frame(self, width=190)
         left.pack(side="left", fill="y")
         left.pack_propagate(False)
         tk.Label(left, text="Sections", font=("Segoe UI", 9, "bold")).pack(pady=(6, 2))
-        self.pick_canvas = tk.Canvas(left, width=176, highlightthickness=0)
-        psb = tk.Scrollbar(left, orient="vertical", command=self.pick_canvas.yview)
-        self.pick_inner = tk.Frame(self.pick_canvas)
-        self.pick_inner.bind("<Configure>", lambda e: self.pick_canvas.configure(
-            scrollregion=self.pick_canvas.bbox("all")))
-        self.pick_canvas.create_window((0, 0), window=self.pick_inner, anchor="nw")
-        self.pick_canvas.configure(yscrollcommand=psb.set)
-        self.pick_canvas.pack(side="left", fill="both", expand=True)
-        psb.pack(side="right", fill="y")
+        self.pick = gw.ScrollFrame(left)
+        self.pick.pack(fill="both", expand=True)
 
-        right = tk.Frame(self, width=340)
+        right = tk.Frame(self, width=360)
         right.pack(side="right", fill="y")
         right.pack_propagate(False)
         self._build_tuning_panel(right)
 
         center = tk.Frame(self)
         center.pack(side="left", fill="both", expand=True)
-        self.fig = Figure(figsize=(6, 6), tight_layout=True)
-        self.ax = self.fig.add_subplot(111)
-        self.ax.set_axis_off()
-        self.canvas = FigureCanvasTkAgg(self.fig, master=center)
-        self.canvas.get_tk_widget().pack(fill="both", expand=True)
-        NavigationToolbar2Tk(self.canvas, center)
-        self.selector = RectangleSelector(
-            self.ax, self._on_rect, useblit=True, button=[1],
-            minspanx=5, minspany=5, spancoords="pixels", interactive=True)
-        self.selector.set_active(False)
-        self.status = tk.Label(center, text="Pick a section, then drag a ROI.",
+        self.status = tk.Label(center, text="Pick a section, then Draw ROI.",
                                anchor="w", relief="sunken")
         self.status.pack(fill="x", side="bottom")
+        self.nb = ttk.Notebook(center)
+        self.nb.pack(fill="both", expand=True)
+        self._build_thumb_tab()
+        self._build_roi_tab()
+
+    def _build_thumb_tab(self) -> None:
+        tab = tk.Frame(self.nb)
+        self.nb.add(tab, text="Thumbnail")
+        bar = tk.Frame(tab)
+        bar.pack(fill="x")
+        tk.Button(bar, text="Draw ROI", command=self.on_draw_roi).pack(side="left", padx=2, pady=2)
+        self.btn_open = tk.Button(bar, text="Open ROI", command=self.on_open_roi,
+                                  state="disabled")
+        self.btn_open.pack(side="left", padx=2)
+        tk.Button(bar, text="Clear ROI", command=self.clear_roi).pack(side="left", padx=2)
+        tk.Button(bar, text="Reset view", command=lambda: self.thumb_nav.reset()).pack(side="left", padx=2)
+        tk.Label(bar, text="View ×").pack(side="left", padx=(12, 0))
+        ttk.OptionMenu(bar, self.view_mult, "1×", *_VIEW_MULTS,
+                       command=lambda _v: self._reload_display()).pack(side="left")
+
+        self.thumb_fig = Figure(figsize=(6, 6), tight_layout=True)
+        self.thumb_ax = self.thumb_fig.add_subplot(111)
+        self.thumb_ax.set_axis_off()
+        self.thumb_canvas = FigureCanvasTkAgg(self.thumb_fig, master=tab)
+        self.thumb_canvas.get_tk_widget().pack(fill="both", expand=True)
+        self.thumb_nav = CanvasNav(self.thumb_canvas, self.thumb_ax)
+        self.selector = RectangleSelector(
+            self.thumb_ax, self._on_rect, useblit=False, button=[1],
+            minspanx=5, minspany=5, spancoords="pixels", interactive=True)
+        self.selector.set_active(False)
+
+    def _build_roi_tab(self) -> None:
+        tab = tk.Frame(self.nb)
+        self.nb.add(tab, text="ROI")
+        self.roi_tab = tab
+        bar = tk.Frame(tab)
+        bar.pack(fill="x")
+        tk.Button(bar, text="Reset view", command=lambda: self.roi_nav.reset()).pack(side="left", padx=2, pady=2)
+        tk.Button(bar, text="Save…", command=self.on_save).pack(side="left", padx=2)
+        tk.Label(bar, text="bar").pack(side="left", padx=(10, 0))
+        ttk.OptionMenu(bar, self.sb_len, "Auto", "Auto", "50", "100", "200",
+                       "500", "1000").pack(side="left")
+        tk.Checkbutton(bar, text="label", variable=self.sb_label).pack(side="left")
+        ttk.OptionMenu(bar, self.sb_pos, "BR", *_SB_POS.keys()).pack(side="left")
+        tk.Button(bar, text="Close ROI", command=self.clear_roi).pack(side="left", padx=(10, 2))
+
+        self.roi_fig = Figure(figsize=(6, 6), tight_layout=True)
+        self.roi_ax = self.roi_fig.add_subplot(111)
+        self.roi_ax.set_axis_off()
+        self.roi_canvas = FigureCanvasTkAgg(self.roi_fig, master=tab)
+        self.roi_canvas.get_tk_widget().pack(fill="both", expand=True)
+        self.roi_nav = CanvasNav(self.roi_canvas, self.roi_ax)
+        self._roi_hint()
+
+    def _roi_hint(self) -> None:
+        self.roi_ax.clear()
+        self.roi_ax.set_axis_off()
+        self.roi_ax.text(0.5, 0.5, "Draw a ROI on the Thumbnail tab,\nthen 'Open ROI'.",
+                         ha="center", va="center", fontsize=10, color="#888")
+        self.roi_canvas.draw_idle()
 
     def _build_tuning_panel(self, parent: tk.Frame) -> None:
+        sf = gw.ScrollFrame(parent)
+        sf.pack(fill="both", expand=True)
+        body = sf.interior
+
         # top controls
-        top = tk.Frame(parent, padx=6, pady=6)
+        top = tk.Frame(body, padx=6, pady=6)
         top.pack(fill="x")
-        tk.Checkbutton(top, text="Hi-res view", variable=self.hi_res,
-                       command=self._reload_display).grid(row=0, column=0, sticky="w")
-        self.btn_open = tk.Button(top, text="Open ROI", command=self.on_open_roi,
-                                  state="disabled")
-        self.btn_open.grid(row=0, column=1, padx=4)
-        tk.Button(top, text="Recompute", command=self.request_recompute).grid(row=0, column=2, padx=4)
-        tk.Button(top, text="Export → config", command=self.on_export).grid(row=0, column=3, padx=4)
+        self.btn_recompute = tk.Button(top, text="↻  Recompute", font=("Segoe UI", 10, "bold"),
+                                       bg="#2e7d32", fg="white", command=self.request_recompute)
+        self.btn_recompute.pack(side="left", fill="x", expand=True)
+        self.dirty_dot = tk.Label(top, text="●", fg="#bbb", font=("Segoe UI", 12))
+        self.dirty_dot.pack(side="left", padx=4)
+        tk.Button(top, text="Export → config", command=self.on_export).pack(side="left", padx=2)
 
         # threshold override
-        thr = tk.LabelFrame(parent, text="Seed threshold", padx=6, pady=4)
+        thr = tk.LabelFrame(body, text="Seed threshold", padx=6, pady=4)
         thr.pack(fill="x", padx=6, pady=2)
         tk.Checkbutton(thr, text="Auto on ROI", variable=self.manual_auto,
                        command=self._on_manual_toggle).grid(row=0, column=0, sticky="w")
@@ -259,121 +242,43 @@ class PreviewWindow(tk.Toplevel):
         self.manual_entry = tk.Entry(thr, textvariable=self.manual_thr, width=10,
                                      state="disabled")
         self.manual_entry.grid(row=0, column=2, sticky="w")
-        self.manual_thr.trace_add("write", lambda *_: self._schedule_recompute())
+        self.manual_thr.trace_add("write", lambda *_: self._on_field_edit(recompute=True))
 
-        # layer show toggles
-        lay = tk.LabelFrame(parent, text="Layers", padx=6, pady=4)
+        # layers panel (show / colour / alpha per layer)
+        lay = tk.LabelFrame(body, text="Layers", padx=6, pady=4)
         lay.pack(fill="x", padx=6, pady=2)
-        labels = {"nontissue": "non-tissue", "artifact": "artifact", "fold": "fold",
-                  "sabg": "SABG+", "edge_removed": "edge-rejected"}
-        for i, (key, _c, default) in enumerate(LAYER_SPEC):
-            v = tk.BooleanVar(value=default)
-            self.show_vars[key] = v
-            tk.Checkbutton(lay, text=labels[key], variable=v,
-                           command=self._redraw).grid(row=i // 2, column=i % 2, sticky="w")
+        gw.build_layers_panel(lay, self.cfg, self.show_vars, self._redraw)
 
-        # scrollable settings groups
-        canv = tk.Canvas(parent, highlightthickness=0)
-        sb = tk.Scrollbar(parent, orient="vertical", command=canv.yview)
-        inner = tk.Frame(canv)
-        inner.bind("<Configure>", lambda e: canv.configure(scrollregion=canv.bbox("all")))
-        canv.create_window((0, 0), window=inner, anchor="nw")
-        canv.configure(yscrollcommand=sb.set)
-        canv.pack(side="left", fill="both", expand=True, padx=(6, 0), pady=2)
-        sb.pack(side="right", fill="y")
-        for title, fields, recompute in GROUPS:
-            self._build_group(inner, title, fields, recompute)
-
-    def _build_group(self, parent, title, fields, recompute) -> None:
-        lf = tk.LabelFrame(parent, text=title, padx=4, pady=2)
-        lf.pack(fill="x", expand=True, pady=2)
-        for row, spec in enumerate(fields):
-            section, attr, kind, label, tip = spec[0], spec[1], spec[2], spec[3], spec[4]
-            obj = getattr(self.cfg, section) if section else self.cfg
-            cur = getattr(obj, attr)
-            lbl = tk.Label(lf, text=label, anchor="w", width=20)
-            lbl.grid(row=row, column=0, sticky="w")
-            _Tooltip(lbl, tip)
-            if kind == "bool":
-                var = tk.BooleanVar(value=bool(cur))
-                w = tk.Checkbutton(lf, variable=var,
-                                   command=lambda s=section, a=attr, v=None, rc=recompute:
-                                   self._on_field_change(s, a, "bool", rc))
-                self.field_vars[(section, attr)] = var
-                w.grid(row=row, column=1, sticky="w")
-            elif kind == "choice":
-                choices = spec[5]
-                var = tk.StringVar(value=str(cur))
-                w = ttk.OptionMenu(lf, var, str(cur), *choices,
-                                   command=lambda _v, s=section, a=attr, rc=recompute:
-                                   self._on_field_change(s, a, "choice", rc))
-                self.field_vars[(section, attr)] = var
-                w.grid(row=row, column=1, sticky="ew")
-            else:  # int / float
-                var = tk.StringVar(value=str(cur))
-                w = tk.Entry(lf, textvariable=var, width=10)
-                var.trace_add("write", lambda *_a, s=section, at=attr, k=kind, rc=recompute:
-                              self._on_field_change(s, at, k, rc))
-                self.field_vars[(section, attr)] = var
-                w.grid(row=row, column=1, sticky="w")
-            _Tooltip(w, tip)
-        lf.columnconfigure(1, weight=1)
+        # collapsible detection groups
+        gw.build_groups(body, self.cfg, gw.DETECTION_GROUPS, self.field_vars,
+                        self._on_field, recompute=True,
+                        opened={"1. Tissue", "4. SABG detection"})
 
     # -- picker ------------------------------------------------------------
     def _populate_picker(self) -> None:
         try:
             entries = preview.list_sections(self.data_dir, self.out_dir, self.cfg)
         except Exception as exc:
-            tk.Label(self.pick_inner, text=f"(error: {exc})", wraplength=160,
+            tk.Label(self.pick.interior, text=f"(error: {exc})", wraplength=160,
                      fg="red").pack()
             return
-        have_thumbs = [e for e in entries if e.thumb_path.exists()]
-        if not have_thumbs:
-            tk.Label(self.pick_inner, text="No thumbnails.\nRun Scan first.",
-                     wraplength=160, fg="#a00").pack(pady=10)
-            return
-        # one shared integer subsample factor -> picker thumbs stay proportional
-        longest = 1
-        for e in have_thumbs:
-            try:
-                img = tk.PhotoImage(file=str(e.thumb_path))
-                longest = max(longest, img.width(), img.height())
-            except Exception:
-                pass
-        factor = max(1, -(-longest // 150))         # ceil(longest / 150)
-        for e in entries:
-            cell = tk.Frame(self.pick_inner, padx=2, pady=3)
-            cell.pack(fill="x")
-            if e.thumb_path.exists():
-                try:
-                    img = tk.PhotoImage(file=str(e.thumb_path)).subsample(factor, factor)
-                    self._photo_refs.append(img)
-                    b = tk.Button(cell, image=img, relief="raised",
-                                  command=lambda en=e: self._select_section(en))
-                    b.pack()
-                except Exception:
-                    tk.Button(cell, text=e.alias,
-                              command=lambda en=e: self._select_section(en)).pack()
-            txt = e.alias + ("  (skip)" if e.skipped else "")
-            tk.Label(cell, text=txt, font=("Segoe UI", 7),
-                     fg="#888" if e.skipped else "#000").pack()
+        gw.thumbnail_picker(self.pick.interior, entries, self._select_section,
+                            self._photo_refs)
 
     # -- section / ROI -----------------------------------------------------
     def _select_section(self, entry: preview.SectionEntry) -> None:
         self.entry = entry
-        self.roi_rgb = None
-        self.layers = None
-        self.btn_open.configure(state="disabled")
+        self.clear_roi(refresh=False)         # switching sections clears any ROI
         self.status.configure(text=f"{entry.alias}: loading view…")
+        self.nb.select(0)
         self._reload_display()
 
     def _reload_display(self) -> None:
-        """(Re)load the section's display image for ROI drawing (thumb or hi-res)."""
+        """(Re)load the section's display image for ROI drawing (thumb or finer)."""
         if self.entry is None:
             return
-        if self.hi_res.get():
-            self._submit(self._read_hires, self.entry.scene, tag="display")
-        else:
+        mult = int(self.view_mult.get().rstrip("×"))
+        if mult <= 1:
             try:
                 bgr = cv2.imread(str(self.entry.thumb_path), cv2.IMREAD_COLOR)
                 if bgr is None:
@@ -381,41 +286,70 @@ class PreviewWindow(tk.Toplevel):
                 self._show_display(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
             except Exception as exc:
                 self.status.configure(text=f"thumb error: {exc}")
+        else:
+            self._submit(self._read_display_hi, self.entry.scene, mult, tag="display")
 
-    def _read_hires(self, scene):
+    def _read_display_hi(self, scene, mult):
         import pylibCZIrw.czi as pyczi
+        um = max(self.cfg.maps_um_per_px * 0.25, self.cfg.thumb_um_per_px / mult)
+        edge = min(self.cfg.maps_max_edge, int(self.cfg.thumb_max_edge * mult))
         with pyczi.open_czi(scene.path) as doc:
             rgb, _ = preview.czi_io.read_overview(
-                doc, scene, max_edge=self.cfg.maps_max_edge, zoom_cap=1.0,
-                um_per_px=self.cfg.maps_um_per_px)
+                doc, scene, max_edge=edge, zoom_cap=1.0, um_per_px=um)
         return ("display", rgb)
 
     def _show_display(self, rgb: np.ndarray) -> None:
         self.disp_rgb = rgb
-        self.roi_rgb = None
-        self.ax.clear()
-        self.ax.set_axis_off()
-        self.ax.imshow(rgb)
-        self.ax.set_title(f"{self.entry.alias} — drag a ROI", fontsize=9)
+        self.thumb_ax.clear()
+        self.thumb_ax.set_axis_off()
+        self.thumb_ax.imshow(rgb)
+        title = "drag a ROI" if self.roi_rgb is None else "ROI fixed — Clear ROI to redraw"
+        self.thumb_ax.set_title(f"{self.entry.alias} — {title}", fontsize=9)
+        self.thumb_canvas.draw_idle()
+        self.thumb_nav.set_home()
+        self.selector.set_active(self.roi_rgb is None)
+        if self.roi_rgb is None:
+            self.status.configure(
+                text=f"{self.entry.alias}: 'Draw ROI', then drag a rectangle.")
+
+    def on_draw_roi(self) -> None:
+        if self.entry is None:
+            return
+        if self.roi_rgb is not None:           # start a fresh ROI
+            self.clear_roi()
+        self.nb.select(0)
         self.selector.set_active(True)
-        self.canvas.draw_idle()
-        self.status.configure(text=f"{self.entry.alias}: drag a rectangle to set the ROI.")
+        self.status.configure(text="drag a rectangle to set the ROI.")
 
     def _on_rect(self, eclick, erelease) -> None:
+        if self._setting_extents or self.entry is None or self.disp_rgb is None:
+            return
+        if eclick.xdata is None or erelease.xdata is None:
+            return
         x0, x1 = sorted((eclick.xdata, erelease.xdata))
         y0, y1 = sorted((eclick.ydata, erelease.ydata))
-        self._sel_extents = (x0, y0, x1 - x0, y1 - y0)
-        if self.entry is not None and self.disp_rgb is not None:
-            h, w = self.disp_rgb.shape[:2]
-            x, y, ww, hh = preview.roi_rect_full(
-                self.entry.scene, w, h, *self._sel_extents,
-                cap_um=self.cfg.gui.preview_roi_cap_um)
-            self.roi_rect = (x, y, ww, hh)
-            um = (ww * self.entry.scene.pixel_size_um
-                  if self.entry.scene.pixel_size_um else 0)
-            self.btn_open.configure(state="normal")
-            self.status.configure(
-                text=f"ROI {ww}x{hh}px (~{um:.0f}µm) — click 'Open ROI'.")
+        h, w = self.disp_rgb.shape[:2]
+        x, y, ww, hh = preview.roi_rect_full(
+            self.entry.scene, w, h, x0, y0, x1 - x0, y1 - y0,
+            cap_um=self.cfg.gui.preview_roi_cap_um)
+        self.roi_rect = (x, y, ww, hh)
+        # reflect the cap back onto the on-screen rectangle (held at the cap)
+        sc = self.entry.scene
+        tx0 = (x - sc.x) * w / max(sc.w, 1)
+        ty0 = (y - sc.y) * h / max(sc.h, 1)
+        tw = ww * w / max(sc.w, 1)
+        th = hh * h / max(sc.h, 1)
+        self._sel_extents = (tx0, ty0, tw, th)
+        self._setting_extents = True
+        try:
+            self.selector.extents = (tx0, tx0 + tw, ty0, ty0 + th)
+        finally:
+            self._setting_extents = False
+        um = ww * sc.pixel_size_um if sc.pixel_size_um else 0
+        capped = " (at cap)" if self.cfg.gui.preview_roi_cap_um and um >= \
+            self.cfg.gui.preview_roi_cap_um - 1 else ""
+        self.btn_open.configure(state="normal")
+        self.status.configure(text=f"ROI {ww}x{hh}px (~{um:.0f}µm){capped} — 'Open ROI'.")
 
     def on_open_roi(self) -> None:
         if self.entry is None or self.roi_rect is None:
@@ -430,31 +364,52 @@ class PreviewWindow(tk.Toplevel):
             rgb = preview.read_roi(doc, x, y, w, h, 1.0)
         return ("roi", rgb, scene.pixel_size_um)
 
-    # -- recompute ---------------------------------------------------------
-    def _on_field_change(self, section, attr, kind, recompute) -> None:
+    def clear_roi(self, refresh: bool = True) -> None:
+        """Drop the current ROI and return to an editable thumbnail.
+
+        *refresh* redraws the thumbnail (removing the rectangle) and switches to
+        the Thumbnail tab; pass False when a new section is about to reload it.
+        """
+        self.roi_rgb = None
+        self.roi_px_um = None
+        self.roi_rect = None
+        self.layers = None
+        self._sel_extents = None
+        self.roi_nav.clear_home()
+        self.btn_open.configure(state="disabled")
+        self._roi_hint()
+        if refresh and self.entry is not None and self.disp_rgb is not None:
+            self._show_display(self.disp_rgb)   # clears axes -> removes the rectangle
+            self.nb.select(0)
+
+    # -- recompute / dirty -------------------------------------------------
+    def _on_field(self, section, attr, kind, recompute) -> None:
         var = self.field_vars[(section, attr)]
-        obj = getattr(self.cfg, section) if section else self.cfg
-        try:
-            if kind == "bool":
-                val = bool(var.get())
-            elif kind == "int":
-                val = int(float(var.get()))
-            elif kind == "float":
-                val = float(var.get())
-            else:
-                val = var.get()
-        except (ValueError, tk.TclError):
-            return                                  # mid-typing; ignore until valid
-        setattr(obj, attr, val)
+        if not gw.apply_field(self.cfg, section, attr, kind, var):
+            return                              # mid-typing; ignore until valid
+        self._on_field_edit(recompute)
+
+    def _on_field_edit(self, recompute) -> None:
+        self._mark_dirty()
         if recompute:
             self._schedule_recompute()
         else:
             self._redraw()
 
+    def _mark_dirty(self) -> None:
+        self._dirty = True
+        self.dirty_dot.configure(fg="#e8a000")
+        self.btn_recompute.configure(bg="#e8a000")
+
+    def _clear_dirty(self) -> None:
+        self._dirty = False
+        self.dirty_dot.configure(fg="#bbb")
+        self.btn_recompute.configure(bg="#2e7d32")
+
     def _on_manual_toggle(self) -> None:
         auto = self.manual_auto.get()
         self.manual_entry.configure(state="disabled" if auto else "normal")
-        self._schedule_recompute()
+        self._on_field_edit(recompute=True)
 
     def _schedule_recompute(self) -> None:
         if self._recompute_job is not None:
@@ -513,7 +468,8 @@ class PreviewWindow(tk.Toplevel):
                     self._show_display(item[1])
                 elif kind == "roi":
                     self.roi_rgb, self.roi_px_um = item[1], item[2]
-                    self.selector.set_active(False)
+                    self.selector.set_active(False)     # ROI fixed while open
+                    self.nb.select(self.roi_tab)
                     self.request_recompute()
                 elif kind == "layers":
                     self.layers = item[1]
@@ -532,6 +488,7 @@ class PreviewWindow(tk.Toplevel):
         lay = self.layers
         if lay is None:
             return
+        self._clear_dirty()
         if self.manual_auto.get():          # reflect the auto threshold back
             self.manual_thr.set(f"{lay['thr']:.4f}")
         t = lay["tissue"]
@@ -541,27 +498,64 @@ class PreviewWindow(tk.Toplevel):
                  f"tissue={100*t.mean():.1f}%  fold={100*lay['fold'].mean():.1f}%")
         self._redraw()
 
-    def _redraw(self) -> None:
+    def _composite(self) -> np.ndarray | None:
         if self.roi_rgb is None or self.layers is None:
-            return
+            return None
         ov = self.cfg.overlay
         order = []
-        for key, color_attr, _d in LAYER_SPEC:
+        for key, color_attr, alpha_attr, _d in gw.LAYER_SPEC:
             if self.show_vars[key].get():
-                color = getattr(ov, color_attr)
-                alpha = getattr(ov, {"nontissue": "nontissue_alpha",
-                                     "artifact": "artifact_alpha",
-                                     "fold": "fold_alpha", "sabg": "sabg_alpha",
-                                     "edge_removed": "edge_alpha"}[key])
-                order.append((self.layers[key], tuple(color), float(alpha)))
-        comp = overlay.composite_overlay(self.roi_rgb, order)
-        self.ax.clear()
-        self.ax.set_axis_off()
-        self.ax.imshow(comp)
-        self.ax.set_title(f"{self.entry.alias} — ROI", fontsize=9)
-        self.canvas.draw_idle()
+                order.append((self.layers[key], tuple(getattr(ov, color_attr)),
+                              float(getattr(ov, alpha_attr))))
+        return overlay.composite_overlay(self.roi_rgb, order)
 
-    # -- export / close ----------------------------------------------------
+    def _redraw(self) -> None:
+        comp = self._composite()
+        if comp is None:
+            return
+        keep = (self.roi_ax.get_xlim(), self.roi_ax.get_ylim())
+        self.roi_ax.clear()
+        self.roi_ax.set_axis_off()
+        self.roi_ax.imshow(comp)
+        self.roi_ax.set_title(f"{self.entry.alias} — ROI", fontsize=9)
+        if self.roi_nav._home is not None:          # preserve zoom/pan across redraws
+            self.roi_ax.set_xlim(*keep[0])
+            self.roi_ax.set_ylim(*keep[1])
+        else:
+            self.roi_nav.set_home()
+        self.roi_canvas.draw_idle()
+
+    # -- save / export / close ---------------------------------------------
+    def on_save(self) -> None:
+        comp = self._composite()
+        if comp is None:
+            messagebox.showinfo("Save", "Open a ROI and recompute first.", parent=self)
+            return
+        path = filedialog.asksaveasfilename(
+            parent=self, defaultextension=".png",
+            filetypes=[("PNG", "*.png"), ("JPEG", "*.jpg")],
+            initialfile=f"{self.entry.alias}_roi.png")
+        if not path:
+            return
+        img = comp
+        px_um = self.roi_px_um
+        if px_um:
+            if self.sb_len.get() == "Auto":
+                bar_um = export.adaptive_bar_um(img.shape[1], px_um, target_um=200.0)
+            else:
+                bar_um = float(self.sb_len.get())
+            img = export.draw_scalebar(img, px_um, bar_um, color=(0, 0, 0),
+                                       label=self.sb_label.get(),
+                                       position=_SB_POS[self.sb_pos.get()])
+        else:
+            messagebox.showwarning("Save", "No pixel size — saving without a scale bar.",
+                                   parent=self)
+        try:
+            cv2.imwrite(path, cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+            self.status.configure(text=f"saved {path}")
+        except Exception as exc:
+            messagebox.showerror("Save failed", str(exc), parent=self)
+
     def on_export(self) -> None:
         dst = self.config_path
         if dst.exists() and not messagebox.askyesno(
