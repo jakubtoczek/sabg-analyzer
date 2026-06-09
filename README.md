@@ -20,7 +20,11 @@ Inspecting the example slides revealed three facts that drive the whole design:
 2. **Background is two things**: white slide glass *and* black unsampled mosaic gaps.
    Both are excluded from "tissue".
 3. **Signal is sparse**, so a naive Otsu threshold cuts into the tissue bulk. The default
-   is the **triangle** method, computed from a full-res score histogram over tissue.
+   is the **triangle** method, computed from a full-res score histogram over tissue. The
+   threshold is applied with **hysteresis** (seed + grow): a strict seed threshold marks
+   confident teal, then each seed grows into the *connected* faint teal around it (down to
+   a lower threshold, teal-gated), so faint staining contiguous with a strong region is
+   recovered without admitting isolated faint/edge teal (`detection.hysteresis`).
 4. **Tissue folds read as stain.** A fold stacks tissue on itself → dark in every channel
    → high optical density, which a deconvolution SABG score mistakes for teal. An
    **artifact pass** flags dark-but-not-teal pixels (folds/debris) plus an eroded tissue
@@ -217,6 +221,8 @@ Key knobs (`config.example.yaml` documents them all):
 | `process_zoom` | Processing resolution. 1.0 = full res (recommended). Lower = faster, risks signal loss. |
 | `detection.primary` | `deconvolution` (default) or `opponent`. Both are always exported to compare. |
 | `detection.require_agreement` | SABG⁺ only where **both** scores fire (default true). Kills fold/density false positives. |
+| `threshold.scale` | Multiplies the auto threshold (default 0.9). With hysteresis on this is the **seed** (high) threshold — keep it fairly strict. |
+| `detection.hysteresis` / `hyst_low_scale` / `hyst_teal_min` | **Seed + grow** detection (default on). Seed at `threshold.scale`, then grow each seed into the *connected* faint teal down to `seed × hyst_low_scale` (default 0.5), only into pixels at least `hyst_teal_min` teal (0.04). Captures faint teal contiguous with strong teal; rejects isolated faint/edge teal. Connectivity is decided at maps res; full-res seeds always count. |
 | `detection.auto_estimate` | Estimate the SABG stain vector per scene instead of using defaults. |
 | `artifact.enabled` / `dark_level` / `teal_min` / `erode_px` | Dark fold/debris rejection: dark-and-non-teal pixels + eroded border, excluded from numerator and denominator. |
 | `fold.enabled` / `combine` / `min_length_um` / `max_width_um` / `band_width_um` / … | **Optional** linear-fold rejection: thin curved ridges of *false* SABG+ that aren't dense. Ridge (Frangi) + structure-tensor coherence on the overview density, length/width-guarded, drawn orange. Off by default; `combine`: `product`/`agreement`/`union`/`frangi_only`. |
@@ -238,8 +244,10 @@ Key knobs (`config.example.yaml` documents them all):
 **How to judge a run:** open `sections/<alias>_wb_overlay_fov_scalebar.jpg` (or enable
 `output.debug` for the 6-panel `debug/*_compare.jpg`). Green SABG⁺ pixels should sit on the
 faint teal specks, **not** on khaki tissue or background; red marks excluded folds/debris.
-If green bleeds into tissue, raise the threshold; if real specks are missed, lower it. If
-fold *streaks* still come through green, raise `artifact.dark_level` (e.g. 0.55). Compare the
+If green bleeds into tissue, raise `threshold.scale` (stricter seeds); if real specks are
+missed, lower it, or — for faint teal next to strong teal — lower `detection.hyst_low_scale`
+so seeds grow further. If fold *streaks* still come through green, raise `artifact.dark_level`
+(e.g. 0.55). Compare the
 `opponent` vs `deconvolution` heatmaps and set `detection.primary` to whichever tracks the
 true signal better.
 

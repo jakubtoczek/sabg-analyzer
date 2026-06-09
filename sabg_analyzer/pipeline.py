@@ -128,6 +128,21 @@ def _project(canvas, mask, off_x, off_y, tw, th, scale):
     canvas[by0:by1, bx0:bx1] |= (block > 0)
 
 
+def _grow_connected(seed: np.ndarray, cand: np.ndarray) -> np.ndarray:
+    """Hysteresis reconstruction: keep the connected components of *cand* that
+    contain at least one *seed* pixel (8-connectivity). Both are boolean masks of
+    the same shape; *seed* must be a subset of *cand* for the result to include it.
+    """
+    if not cand.any() or not seed.any():
+        return seed & cand
+    n, lab = cv2.connectedComponents(cand.astype(np.uint8), connectivity=8)
+    hit = np.unique(lab[seed & cand])
+    hit = hit[hit != 0]                       # 0 is the background label
+    if hit.size == 0:
+        return np.zeros_like(cand)
+    return np.isin(lab, hit)
+
+
 def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
                   alias: str | None = None, progress=None) -> dict:
     z = cfg.process_zoom
@@ -266,6 +281,25 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
         if cfg.fold.exclude_from_tissue:
             ov_tissue_count = ov_tissue_count & ~ov_fold
 
+    # --- hysteresis prep: seed/grow connectivity at the maps (HD) resolution ---
+    # Decide ONCE, on the in-memory hd_rgb canvas, which faint teal is CONNECTED to a
+    # confident seed; pass 2 uses this only to gate faint full-res positives. Full-res
+    # seeds are always counted, so the HD mean-pool never loses punctate signal.
+    hd_tissue = segment_tissue(hd_rgb, tcfg)   # computed here, reused for the maps below
+    hyst_on = cfg.detection.hysteresis
+    low_thr = thr * cfg.detection.hyst_low_scale if hyst_on else thr
+    hd_keep = None
+    if hyst_on:
+        hd_dec = scoring.deconvolution_score(hd_rgb, conv)
+        hd_opp = scoring.opponent_score(hd_rgb)
+        hd_p, hd_s = _primary_secondary(hd_dec, hd_opp, primary)
+        hd_seed = hd_tissue & (hd_p >= thr)          # confident seeds (high threshold)
+        if agree and thr_s is not None:
+            hd_seed &= (hd_s >= thr_s)
+        hd_cand = (hd_tissue & (hd_p >= low_thr)      # grow region (low threshold + teal)
+                   & (hd_opp >= cfg.detection.hyst_teal_min))
+        hd_keep = _grow_connected(hd_seed, hd_cand)   # faint teal reachable from a seed
+
     # --- pass 2: count + project positives/artifacts ----------------------
     # Rejected SABG+ inside the fold band is tracked separately so the overlay can
     # still show it (green on top of the orange band) while it stays out of the count.
@@ -307,11 +341,21 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
             continue
         deconv = scoring.deconvolution_score(rgb, conv)
         p_s, s_s = _primary_secondary(deconv, opp, primary)
-        hot = (p_s >= thr)
+        hot = (p_s >= thr)                # seed / high threshold
         if agree and thr_s is not None:
             hot &= (s_s >= thr_s)
         if t.any():
             pos = t & hot
+            if hyst_on and hd_keep is not None:   # grow seeds into connected faint teal
+                cand = t & (p_s >= low_thr) & (opp >= cfg.detection.hyst_teal_min)
+                hx0, hx1 = _overview_block(ox, tw, hd_scale, Wh)
+                hy0, hy1 = _overview_block(oy, th, hd_scale, Hh)
+                if hx1 > hx0 and hy1 > hy0 and cand.any():
+                    keep_here = cv2.resize(
+                        hd_keep[hy0:hy1, hx0:hx1].astype(np.uint8),
+                        (rgb.shape[1], rgb.shape[0]),
+                        interpolation=cv2.INTER_NEAREST).astype(bool)
+                    pos = pos | (cand & keep_here)   # full-res seeds | grown faint teal
             if cfg.fold.enabled and not cfg.fold.exclude_from_tissue and fold is not None:
                 pos &= ~fold              # numerator-only: drop fold positives
             if edge_on:                   # drop thin edge-shadow rims (numerator only)
@@ -358,8 +402,8 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
                           interpolation=cv2.INTER_NEAREST).astype(bool)
                if cfg.fold.enabled else np.zeros((Hh, Wh), bool))
 
-    # HD tissue for the maps (export derives the grey non-tissue shade per figure).
-    hd_tissue = segment_tissue(hd_rgb, tcfg)
+    # HD tissue (hd_tissue) for the maps was computed once in the hysteresis prep
+    # above (export derives the grey non-tissue shade per figure from it).
 
     # --- overview maps (higher-res; consumed by `export`) -----------------
     written: list = []
@@ -620,6 +664,9 @@ def _write_config_snapshot(path: Path, cfg: Config, rows: list[dict]) -> None:
         "detection": {"primary": cfg.detection.primary,
                       "auto_estimate": cfg.detection.auto_estimate,
                       "require_agreement": cfg.detection.require_agreement,
+                      "hysteresis": cfg.detection.hysteresis,
+                      "hyst_low_scale": cfg.detection.hyst_low_scale,
+                      "hyst_teal_min": cfg.detection.hyst_teal_min,
                       "expand_px": cfg.detection.expand_px,
                       "expand_teal_min": cfg.detection.expand_teal_min},
         "threshold": {"method": cfg.threshold.method,

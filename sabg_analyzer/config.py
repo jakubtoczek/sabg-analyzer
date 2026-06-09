@@ -26,6 +26,14 @@ class DetectionParams:
     stain_matrix: np.ndarray | None = None  # 3x3, rows = SABG/counter/residual
     auto_estimate: bool = False
     require_agreement: bool = True          # SABG+ only where BOTH scores fire
+    # Hysteresis thresholding: SEED at the (raised) threshold, then GROW each seed
+    # into the CONNECTED faint teal around it (which can be large), so faint teal
+    # contiguous with strong teal is recovered while isolated faint/edge teal is not.
+    # Connectivity is decided at the maps (HD) resolution; full-res seeds are always
+    # counted, so punctate signal is never lost. False = plain single-threshold.
+    hysteresis: bool = True
+    hyst_low_scale: float = 0.5             # grow/low threshold = seed threshold x this
+    hyst_teal_min: float = 0.04             # only grow into pixels at least this teal (opponent)
     expand_px: int = 2                      # dilate the final positive mask by this many px
     expand_teal_min: float = 0.04           # only grow into pixels this teal (opponent);
                                             # keeps growth on real teal, not edges/tissue.

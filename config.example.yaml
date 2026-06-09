@@ -134,6 +134,17 @@ detection:
   # single-score behaviour.
   require_agreement: true
 
+  # Hysteresis thresholding (seed + grow). SEED at threshold.scale (the high/strict
+  # threshold), then GROW each seed into the CONNECTED faint teal around it (can be
+  # large) down to the low threshold. Faint teal contiguous with a strong seed is
+  # captured; isolated faint/edge teal is rejected. Connectivity is decided at the
+  # maps (HD) resolution; full-res seeds are always counted (punctate signal is kept).
+  # false = plain single-threshold (the seed level only).
+  hysteresis: true
+  hyst_low_scale: 0.5    # grow/low threshold = (seed threshold) x this  (lower = grow further)
+  hyst_teal_min: 0.04    # only grow into pixels at least this teal (opponent); stops growth
+                         # bleeding into achromatic edges / blank tissue. 0 = grow into any.
+
   # Grow the final SABG+ mask by this many px (after the edge filter) to recover
   # faint staining trimmed by a conservative threshold. 0 = off.
   expand_px: 2
@@ -160,7 +171,10 @@ threshold:
   percentile: 99.0     # used when method == percentile
   value: null          # used when method == fixed
   min_score: 0.0       # never threshold below this (guardrail against noise)
-  scale: 0.75          # multiply the auto threshold (<1 = more sensitive; 1 = off)
+  scale: 0.9           # multiply the auto threshold (<1 = more sensitive; 1 = off).
+                       # With detection.hysteresis on this is the SEED (high) threshold:
+                       # keep it fairly strict; the hysteresis grow step recovers faint
+                       # teal that is CONNECTED to a seed (lower=more seeds; raise=fewer).
   # SPEED: derive the threshold from the in-memory overview and SKIP the full-res
   # pass 1 (~2x faster). The threshold can shift slightly (the sparse signal tail
   # is thinner when downsampled), so it's off by default; turn on for quick looks.
