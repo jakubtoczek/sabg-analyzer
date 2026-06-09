@@ -9,7 +9,7 @@ Launch:  python sabg_gui.py        (or double-click SABG_Analyzer.bat)
 Buttons
   Data / Output  - browse to the .czi data folder and the output folder
   Scan           - detect sections, extract labels, write sections.csv
-  Info           - (after scan) open sections.csv + labels + thumbnails to fill in
+  Info           - (after scan) edit sections.csv in-app (thumbnail picker + table)
   Analyze        - (after scan) quantify %SABG, then (default) render the figures
                    in one timed pass; warns only if the animal-ID fields (or a
                    custom tag) are blank
@@ -17,7 +17,7 @@ Buttons
   Stop/Resume    - Stop the running job; once stopped, Resume finishes the rest
                    (analyze + export), skipping sections already done
   Help           - open the README
-  Config         - open <output>/config.yaml (created from the example if missing)
+  Config         - edit <output>/config.yaml in-app (detection tuning + settings)
   Log            - live, timestamped CLI output
 """
 
@@ -305,6 +305,20 @@ class App:
 
     # -- button actions ----------------------------------------------------
     def on_config(self) -> None:
+        """Open the in-app Config editor (detection tuning + other settings)."""
+        out = Path(self.out_var.get())
+        out.mkdir(parents=True, exist_ok=True)
+        cfg = out / "config.yaml"
+        try:
+            from sabg_info_config import ConfigWindow
+            ConfigWindow(self.root, str(cfg), str(EXAMPLE_CFG))
+            self._log("[gui] opened Config window")
+        except Exception as exc:
+            self._log(f"[gui] config window error: {exc}; opening the file instead")
+            self._open_config_file()
+
+    def _open_config_file(self) -> None:
+        """Fallback: create config.yaml from the example if missing, then open it."""
         out = Path(self.out_var.get())
         out.mkdir(parents=True, exist_ok=True)
         cfg = out / "config.yaml"
@@ -343,6 +357,19 @@ class App:
                   done=lambda rc: self._refresh_state())
 
     def on_info(self) -> None:
+        """Open the in-app Info editor (thumbnail picker + sections.csv table)."""
+        out = Path(self.out_var.get())
+        cfg = out / "config.yaml"
+        try:
+            from sabg_info_config import InfoWindow
+            InfoWindow(self.root, self.data_var.get(), str(out), str(cfg))
+            self._log("[gui] opened Info window")
+        except Exception as exc:
+            self._log(f"[gui] info window error: {exc}; opening files instead")
+            self._open_info_targets()
+
+    def _open_info_targets(self) -> None:
+        """Fallback: open the configured info targets (sections.csv, labels, …)."""
         out = Path(self.out_var.get())
         wanted = self._info_opens()
         opened = []
