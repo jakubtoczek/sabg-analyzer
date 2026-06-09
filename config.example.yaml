@@ -30,6 +30,11 @@ overview_max_edge: 2500   # safety cap (px)
 maps_um_per_px: 3.0
 maps_max_edge: 6000       # safety cap (px)
 
+# `scan` thumbnails: sized by µm/px (proportional to each section's physical size)
+# and bounded by a px cap, so the preview picker can show sections at relative scale.
+thumb_um_per_px: 12.0
+thumb_max_edge: 1280      # safety cap (px); high enough that typical sections stay proportional
+
 # Also write the large standalone debug heatmaps (tissue/score/mask) per scene.
 # They are redundant with the *_compare.jpg panel and ~10x the disk, so off by
 # default. CLI: `--full-debug`.

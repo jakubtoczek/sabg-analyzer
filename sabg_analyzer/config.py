@@ -111,6 +111,11 @@ class Config:
     overview_max_edge: int = 2500      # safety cap (px) for the gating overview
     maps_um_per_px: float = 3.0        # maps canvas (saved masks + FOV selection)
     maps_max_edge: int = 6000          # safety cap (px) for the maps canvas
+    # `scan` thumbnails are sized the same way (µm/px proportional + px cap), so the
+    # preview picker shows each section proportional to its real physical size.
+    thumb_um_per_px: float = 12.0      # scan thumbnail resolution
+    thumb_max_edge: int = 1280         # safety cap (px); high enough that typical
+                                       # sections stay proportional (don't all clip)
     full_debug: bool = False
     tissue: TissueParams = field(default_factory=TissueParams)
     artifact: ArtifactParams = field(default_factory=ArtifactParams)
@@ -164,7 +169,7 @@ def load_config(path: str | Path | None) -> Config:
 
     for key in ("process_zoom", "tile_size", "overview_um_per_px",
                 "overview_max_edge", "maps_um_per_px", "maps_max_edge",
-                "full_debug"):
+                "thumb_um_per_px", "thumb_max_edge", "full_debug"):
         if key in raw:
             setattr(cfg, key, raw[key])
 

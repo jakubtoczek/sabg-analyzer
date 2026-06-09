@@ -75,7 +75,9 @@ def scan(data_dir: str | Path, out_dir: str | Path, cfg: Config) -> Path:
                     print(f"        {k}: {meta[k]}{unit}")
             px_um = scenes[0].pixel_size_um if scenes else None
             for s in scenes:
-                ov, _ = czi_io.read_overview(doc, s, max_edge=512, zoom_cap=1.0)
+                ov, _ = czi_io.read_overview(
+                    doc, s, max_edge=cfg.thumb_max_edge, zoom_cap=1.0,
+                    um_per_px=cfg.thumb_um_per_px)
                 tp = thumbs_dir / f"{s.slug}.png"
                 overlay.save_rgb(tp, ov)
                 thumb_rel[s.slug] = str(tp.relative_to(out_dir).as_posix())
@@ -584,6 +586,8 @@ def _write_config_snapshot(path: Path, cfg: Config, rows: list[dict]) -> None:
         "overview_max_edge": cfg.overview_max_edge,
         "maps_um_per_px": cfg.maps_um_per_px,
         "maps_max_edge": cfg.maps_max_edge,
+        "thumb_um_per_px": cfg.thumb_um_per_px,
+        "thumb_max_edge": cfg.thumb_max_edge,
         "tissue": {"gap_level": cfg.tissue.gap_level,
                    "white_level": cfg.tissue.white_level,
                    "sat_min": cfg.tissue.sat_min,
