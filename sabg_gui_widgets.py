@@ -246,6 +246,35 @@ LAYER_LABELS = {"nontissue": "non-tissue", "artifact": "artifact", "fold": "fold
                 "sabg": "SABG+", "edge_removed": "edge-rejected"}
 
 # ---------------------------------------------------------------------------
+# "Slider setup" mode: one guided sensitivity bar per layer.
+# Each knob = (section, attr, value@0, value@100, label). The slider runs
+# 0 (detect LESS) -> 100 (detect MORE); value@0/value@100 bake in the direction
+# (e.g. texture_min DROPS as sensitivity rises). The first knob is the layer's
+# primary (simple mode); the rest appear only in "advanced (raw knobs)" mode.
+# Mappings + ranges per the session-7 handover §8 (centred on the config defaults).
+SLIDER_LAYERS = [
+    ("tissue", [("tissue", "texture_min", 0.012, 0.001, "texture_min"),
+                ("tissue", "bg_margin", 0.16, 0.04, "bg_margin")]),
+    ("SABG+", [("threshold", "scale", 1.30, 0.50, "threshold.scale"),
+               ("detection", "hyst_low_scale", 0.90, 0.20, "hyst_low_scale")]),
+    ("artifact", [("artifact", "dark_level", 0.30, 0.60, "dark_level")]),
+    ("fold", [("fold", "score_min", 0.15, 0.02, "score_min")]),
+    ("edge-reject", [("edge", "teal_keep", 0.20, 0.02, "teal_keep")]),
+]
+
+
+def slider_to_value(v0: float, v100: float, s: float) -> float:
+    """Sensitivity *s* in [0, 100] -> the knob value (linear v0..v100)."""
+    return v0 + (v100 - v0) * (max(0.0, min(100.0, s)) / 100.0)
+
+
+def value_to_slider(v0: float, v100: float, cur: float) -> float:
+    """Inverse of ``slider_to_value`` (knob value -> slider position 0..100)."""
+    if v100 == v0:
+        return 0.0
+    return max(0.0, min(100.0, 100.0 * (cur - v0) / (v100 - v0)))
+
+# ---------------------------------------------------------------------------
 # "Other settings" (non-detection) groups -- for the Config window's 2nd tab.
 # ---------------------------------------------------------------------------
 SIZING_FIELDS = [
