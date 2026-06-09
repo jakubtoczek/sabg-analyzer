@@ -569,8 +569,10 @@ def _safe_to_csv(df: pd.DataFrame, path: Path) -> Path:
         return alt
 
 
-def _write_config_snapshot(path: Path, cfg: Config, rows: list[dict]) -> None:
-    """Persist the thresholds used, so the user can edit + re-run."""
+def _build_config_snapshot(cfg: Config, rows: list[dict]) -> dict:
+    """Build the full effective config as a YAML-ready dict, with per-scene
+    thresholds from *rows* merged in. Shared by the analyze snapshot writer and the
+    preview's "Export settings" button (which passes ``rows=[]``)."""
     scenes = dict(cfg.scenes)
     for r in rows:
         if r["threshold"] is None:
@@ -677,6 +679,12 @@ def _write_config_snapshot(path: Path, cfg: Config, rows: list[dict]) -> None:
         "export": _export_snapshot(cfg.export),
         "scenes": scenes,
     }
+    return snapshot
+
+
+def _write_config_snapshot(path: Path, cfg: Config, rows: list[dict]) -> None:
+    """Persist the effective config (incl. the thresholds used) so the user can edit + re-run."""
+    snapshot = _build_config_snapshot(cfg, rows)
     path.write_text(yaml.safe_dump(snapshot, sort_keys=False), encoding="utf-8")
 
 
