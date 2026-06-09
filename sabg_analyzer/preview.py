@@ -28,7 +28,7 @@ import cv2
 import numpy as np
 import yaml
 
-from . import czi_io, scoring
+from . import czi_io, export, overlay, scoring, whitebalance
 from .config import Config
 from .czi_io import SceneInfo
 from .fold import detect_folds, fold_density_map
@@ -244,3 +244,49 @@ def export_config(cfg: Config, path: str | Path) -> Path:
     snapshot = _build_config_snapshot(cfg, [])
     path.write_text(yaml.safe_dump(snapshot, sort_keys=False), encoding="utf-8")
     return path
+
+
+def export_roi(rgb: np.ndarray, pixel_size_um: float | None, dest_base: str | Path,
+               *, order=None, formats=("jpg",), scalebar_um: str | float = "Auto",
+               scalebar_pos: str = "br", scalebar_label: bool = True,
+               wb: bool = True, target_um: float = 200.0) -> list[Path]:
+    """Write publication presets for one ROI / section image. Returns the paths.
+
+    Reuses the batch export building blocks (`whitebalance`, `overlay`,
+    `draw_scalebar`, `adaptive_bar_um`) so preview exports match analyze/export.
+
+    Presets (suffix appended to *dest_base*):
+      ``_raw``                 -- *rgb* unchanged.
+      ``_wb_scalebar``         -- white-balanced (if *wb*) + scale bar (if px size).
+      ``_wb_overlay_scalebar`` -- white-balanced + overlay (*order* = the visible
+                                  ``(mask, color, alpha)`` layers) + scale bar;
+                                  only written when *order* has layers.
+    """
+    dest_base = Path(dest_base)
+    written: list[Path] = []
+
+    def _bar(img):
+        if not pixel_size_um:
+            return img
+        bar_um = (export.adaptive_bar_um(img.shape[1], pixel_size_um, target_um=target_um)
+                  if scalebar_um in (None, "Auto") else float(scalebar_um))
+        return export.draw_scalebar(img, pixel_size_um, bar_um, color=(0, 0, 0),
+                                    label=scalebar_label, position=scalebar_pos)
+
+    def _write(img, suffix):
+        for fmt in formats:
+            p = dest_base.with_name(f"{dest_base.name}_{suffix}.{fmt}")
+            if fmt.lower() in ("jpg", "jpeg"):
+                overlay.save_jpg(p, img)
+            else:
+                overlay.save_rgb(p, img)
+            written.append(p)
+
+    _write(rgb, "raw")
+    wb_img = (whitebalance.white_balance(rgb, whitebalance.estimate_white_point(rgb))
+              if wb else rgb)
+    _write(_bar(wb_img.copy()), "wb_scalebar")
+    if order:
+        comp = overlay.composite_overlay(wb_img, order)
+        _write(_bar(comp), "wb_overlay_scalebar")
+    return written

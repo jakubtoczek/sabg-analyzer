@@ -33,7 +33,7 @@ from matplotlib.figure import Figure
 from matplotlib.widgets import RectangleSelector
 
 import sabg_gui_widgets as gw
-from sabg_analyzer import export, overlay, preview, whitebalance
+from sabg_analyzer import overlay, preview, whitebalance
 from sabg_analyzer.config import load_config
 
 _VIEW_MULTS = [1, 2, 4, 8]          # thumb-resolution multipliers for the px/µm picker
@@ -239,8 +239,8 @@ class PreviewWindow(tk.Toplevel):
                         highlightbackground="#aaa", bg="white")
         cvp.pack(side="left", padx=4)
         self._sb_preview_canvases.append(cvp)
-        tk.Button(bar, text="Save…",
-                  command=lambda: self.on_save(source)).pack(side="left", padx=(8, 2))
+        tk.Button(bar, text="Export…",
+                  command=lambda: self.on_export_image(source)).pack(side="left", padx=(8, 2))
         tk.Button(bar, text="?", width=2, command=self._show_help).pack(side="right", padx=2)
 
     def _draw_sb_preview(self) -> None:
@@ -676,17 +676,23 @@ class PreviewWindow(tk.Toplevel):
                      f"edge-rej {100*lay['edge_removed'].mean():.1f}%")
         self.stats_label.configure(text="\n".join(lines))
 
-    def _composite(self) -> np.ndarray | None:
-        if self.roi_rgb is None or self.layers is None:
+    def _overlay_order(self) -> list | None:
+        """The visible ``(mask, color, alpha)`` layers, in draw order (or None)."""
+        if self.layers is None:
             return None
-        base = self._wb(self.roi_rgb, "roi") if self.wb_on.get() else self.roi_rgb
         ov = self.cfg.overlay
         order = []
         for key, color_attr, alpha_attr, _d in gw.LAYER_SPEC:
             if self.show_vars[key].get():
                 order.append((self.layers[key], tuple(getattr(ov, color_attr)),
                               float(getattr(ov, alpha_attr))))
-        return overlay.composite_overlay(base, order)
+        return order
+
+    def _composite(self) -> np.ndarray | None:
+        if self.roi_rgb is None or self.layers is None:
+            return None
+        base = self._wb(self.roi_rgb, "roi") if self.wb_on.get() else self.roi_rgb
+        return overlay.composite_overlay(base, self._overlay_order() or [])
 
     def _redraw(self) -> None:
         comp = self._composite()
@@ -705,44 +711,47 @@ class PreviewWindow(tk.Toplevel):
         self.roi_canvas.draw_idle()
 
     # -- save / export / close ---------------------------------------------
-    def on_save(self, source: str = "roi") -> None:
-        """Save the current view as an image with an optional scale bar.
+    def on_export_image(self, source: str = "roi") -> None:
+        """Export publication presets via `preview.export_roi`.
 
-        *source* "thumb" saves the whole-section display (WB-aware, no overlay);
-        "roi" saves the ROI overlay composite. (§2 replaces this with multi-preset
-        Export; kept here so both tabs have a working Save in the shared toolbar.)
+        ROI tab → raw / wb+scalebar / wb+overlay+scalebar (the three handover
+        presets). Thumbnail tab → raw / wb+scalebar (no overlay layers there).
+        The user picks a base name + format; presets are appended as suffixes.
         """
         if source == "thumb":
             if self.disp_rgb is None or self.entry is None:
-                messagebox.showinfo("Save", "Pick a section first.", parent=self)
+                messagebox.showinfo("Export", "Pick a section first.", parent=self)
                 return
-            img = self._wb(self.disp_rgb, "disp") if self.wb_on.get() else self.disp_rgb
-            px_um, target, default = self._loaded_um, 1000.0, f"{self.entry.alias}_thumb.png"
+            rgb, px_um, order = self.disp_rgb, self._loaded_um, None
+            default, target = f"{self.entry.alias}_thumb", 1000.0
         else:
-            img = self._composite()
-            if img is None:
-                messagebox.showinfo("Save", "Open a ROI and recompute first.", parent=self)
+            if self.roi_rgb is None:
+                messagebox.showinfo("Export", "Open a ROI and recompute first.", parent=self)
                 return
-            px_um, target, default = self.roi_px_um, 200.0, f"{self.entry.alias}_roi.png"
+            rgb, px_um, order = self.roi_rgb, self.roi_px_um, self._overlay_order()
+            default, target = f"{self.entry.alias}_roi", 200.0
         path = filedialog.asksaveasfilename(
-            parent=self, defaultextension=".png",
-            filetypes=[("PNG", "*.png"), ("JPEG", "*.jpg")], initialfile=default)
+            parent=self, title="Export base name (presets are appended)",
+            defaultextension=".jpg", initialfile=default,
+            filetypes=[("JPEG", "*.jpg"), ("PNG", "*.png")])
         if not path:
             return
-        if px_um:
-            bar_um = (export.adaptive_bar_um(img.shape[1], px_um, target_um=target)
-                      if self.sb_len.get() == "Auto" else float(self.sb_len.get()))
-            img = export.draw_scalebar(img, px_um, bar_um, color=(0, 0, 0),
-                                       label=self.sb_label.get(),
-                                       position=_SB_POS[self.sb_pos.get()])
-        else:
-            messagebox.showwarning("Save", "No pixel size — saving without a scale bar.",
-                                   parent=self)
+        base = Path(path)
+        fmt = base.suffix.lstrip(".").lower() or "jpg"
+        if fmt not in ("jpg", "jpeg", "png"):
+            fmt = "jpg"
+        base = base.with_suffix("")
         try:
-            cv2.imwrite(path, cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-            self.status.configure(text=f"saved {path}")
+            written = preview.export_roi(
+                rgb, px_um, base, order=order, formats=(fmt,),
+                scalebar_um=self.sb_len.get(), scalebar_pos=_SB_POS[self.sb_pos.get()],
+                scalebar_label=self.sb_label.get(), wb=True, target_um=target)
+            self.status.configure(
+                text=f"exported {len(written)} preset(s) → {base.parent}")
+            messagebox.showinfo("Exported", "Wrote:\n" + "\n".join(p.name for p in written),
+                                parent=self)
         except Exception as exc:
-            messagebox.showerror("Save failed", str(exc), parent=self)
+            messagebox.showerror("Export failed", str(exc), parent=self)
 
     def on_export(self) -> None:
         dst = self.config_path
@@ -779,7 +788,11 @@ class PreviewWindow(tk.Toplevel):
              "(quantification always uses raw pixels — display only)."),
             ("Scale bar",
              "Length (Auto picks a nice value), label on/off, and corner; the little "
-             "schematic shows where the bar lands. Used by Save."),
+             "schematic shows where the bar lands. Used by Export."),
+            ("Export…",
+             "Writes publication presets next to a base name you pick: raw, "
+             "white-balanced + scale bar, and (ROI tab) white-balanced + overlay + "
+             "scale bar. The Thumbnail tab exports the whole section (no overlay)."),
             ("Tuning (right panel)",
              "Edit any detection setting; the ROI recomputes after a short pause "
              "(orange 'changed' → green 'up to date'). The Result panel shows %SABG, "
