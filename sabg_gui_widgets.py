@@ -377,6 +377,57 @@ OTHER_GROUPS = [
     ("Alias", ALIAS_FIELDS, "How each section's short alias is built from sections.csv."),
 ]
 
+# ---------------------------------------------------------------------------
+# Export options. `Config.export` is a free-form dict, so these fields use
+# section "" and are edited through a `DictObj` proxy (below) over the effective
+# export dict; mirrors `export.ExportParams`.
+# ---------------------------------------------------------------------------
+EXPORT_FOV_FIELDS = [
+    ("", "n_fov", "int", "n_fov", "Number of representative FOV crops per section."),
+    ("", "fov_um", "float", "fov_um", "FOV side length (µm)."),
+    ("", "min_tissue_frac", "float", "min_tissue_frac",
+     "Min tissue fraction (0-1) a FOV must contain; FOVs are picked close to the section average."),
+    ("", "scalebar_um", "float", "scalebar_um", "FOV scale-bar length (µm)."),
+    ("", "scalebar_label", "bool", "scalebar_label", "Draw the FOV scale-bar label text."),
+    ("", "wb", "bool", "wb", "Write white-balanced FOV figures."),
+    ("", "raw", "bool", "raw", "Write original-colour FOV figures."),
+    ("", "plain", "bool", "plain", "Write the clean FOV image without overlay."),
+    ("", "qc_overlay", "bool", "qc_overlay", "Write a FOV copy with the SABG+/artifact overlay."),
+    ("", "formats", "list", "formats", "FOV output formats (comma separated, e.g. jpg, png)."),
+]
+EXPORT_SECTION_FIELDS = [
+    ("", "section_figures", "bool", "section_figures", "Render whole-section overlay figures."),
+    ("", "section_um_per_px", "float", "section_um_per_px", "Section-figure resolution (µm/px)."),
+    ("", "sec_variants", "list", "sec_variants",
+     "Section figure variants (comma separated: raw, wb_scalebar, wb_overlay_fov_scalebar)."),
+    ("", "sec_formats", "list", "sec_formats", "Section figure formats (comma separated)."),
+    ("", "sec_scalebar_um", "float", "sec_scalebar_um", "Section scale-bar length (µm)."),
+    ("", "sec_scalebar_adaptive", "bool", "sec_scalebar_adaptive",
+     "Snap the section scale bar to a nice value near sec_scalebar_um."),
+    ("", "sec_scalebar_label", "bool", "sec_scalebar_label", "Draw the section scale-bar label."),
+]
+EXPORT_GROUPS = [
+    ("FOV crops", EXPORT_FOV_FIELDS,
+     "Representative full-resolution FOV crops (≥ min_tissue_frac tissue, near the section mean)."),
+    ("Section figures", EXPORT_SECTION_FIELDS,
+     "Whole-section overlay figures rendered from the maps."),
+]
+
+
+class DictObj:
+    """Attribute access over a plain dict, so a dict-backed config block (the
+    free-form ``Config.export``) can reuse ``build_field_rows`` / ``apply_field``.
+    Missing keys read as None; writes go straight to the dict."""
+
+    def __init__(self, d: dict) -> None:
+        object.__setattr__(self, "_d", d)
+
+    def __getattr__(self, k):
+        return object.__getattribute__(self, "_d").get(k)
+
+    def __setattr__(self, k, v) -> None:
+        object.__getattribute__(self, "_d")[k] = v
+
 
 # ---------------------------------------------------------------------------
 # field editors

@@ -326,6 +326,7 @@ class ConfigWindow(tk.Toplevel):
         tk.Button(btns, text="Open config.yaml",
                   command=lambda: _open_file(self.cfg_path)).pack(side="left", padx=6)
         tk.Button(btns, text="Reload", command=self._reload).pack(side="left")
+        tk.Button(btns, text="?", width=2, command=self._show_help).pack(side="right")
 
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True)
@@ -347,6 +348,16 @@ class ConfigWindow(tk.Toplevel):
         gw.build_groups(t2.interior, self.cfg, gw.OTHER_GROUPS, self.field_vars,
                         self._on_field, recompute=False)
 
+        # Export tab: bridge the free-form Config.export dict via a DictObj proxy.
+        from sabg_analyzer.pipeline import _export_snapshot
+        self._export_dict = _export_snapshot(self.cfg.export)   # defaults + overrides
+        self._export_obj = gw.DictObj(self._export_dict)
+        self.export_vars: dict[tuple[str, str], tk.Variable] = {}
+        t3 = gw.ScrollFrame(nb)
+        nb.add(t3, text="Export")
+        gw.build_groups(t3.interior, self._export_obj, gw.EXPORT_GROUPS,
+                        self.export_vars, self._on_export_field, recompute=False)
+
     def _reload(self) -> None:
         for w in list(self.children.values()):
             w.destroy()
@@ -355,10 +366,35 @@ class ConfigWindow(tk.Toplevel):
     def _on_field(self, section, attr, kind, _recompute) -> None:
         gw.apply_field(self.cfg, section, attr, kind, self.field_vars[(section, attr)])
 
+    def _on_export_field(self, section, attr, kind, _recompute) -> None:
+        gw.apply_field(self._export_obj, section, attr, kind,
+                       self.export_vars[(section, attr)])
+
     def on_save(self) -> None:
         try:
+            self.cfg.export = dict(self._export_dict)   # fold the Export tab back in
             self.cfg_path.parent.mkdir(parents=True, exist_ok=True)
             preview.export_config(self.cfg, self.cfg_path)
             messagebox.showinfo("Saved", f"Wrote {self.cfg_path}", parent=self)
         except Exception as exc:
             messagebox.showerror("Save failed", str(exc), parent=self)
+
+    def _show_help(self) -> None:
+        gw.help_popup(self, "Config — help", [
+            ("Detection tuning",
+             "The same pipeline-ordered stages as the Preview (tissue → artifact → "
+             "fold → SABG detection → edge). Hover any field for its tooltip. The "
+             "Overlay layers control the colours/alpha used in figures."),
+            ("Other settings",
+             "Canvas sizing (µm/px + px caps), which artifacts analyze/export write "
+             "(incl. maps_um_per_px, keep_maps), progress, GUI knobs and how the alias "
+             "is built from sections.csv."),
+            ("Export",
+             "How `export` builds figures: number/size of FOV crops and how they're "
+             "picked (≥ min_tissue_frac tissue, near the section mean), formats, scale "
+             "bars, and the whole-section figure variants/resolution."),
+            ("Save / Reload",
+             "Save writes the full config.yaml (every block, directly re-loadable). "
+             "Reload re-reads config.yaml, discarding unsaved edits. Per-scene overrides "
+             "live under scenes.<file:idx> and are preserved."),
+        ])
