@@ -272,15 +272,24 @@ export:
   fov_um: 500           # FOV side length in micrometres (~1137 px at 0.44 µm/px)
   scalebar_um: 100      # burned-in scale bar length
   scalebar_label: false # draw the "100 µm" text; false = bare bar
-  n_fov: 5              # representative FOVs per section
+  n_fov: 5              # representative FOVs per section (average/n modes)
   min_tissue_frac: 0.85 # a FOV must be at least this fraction tissue (no gaps/edges)
+  # FOV selection mode: average (near the section mean %SABG, default) | deciles
+  # (10 FOVs spanning the 1st-10th deciles of FOV %SABG -> coloration range) | n
+  # (the n_fov cleanest, no %SABG targeting).
+  fov_select_mode: average
+  max_artifact_frac: 1.0  # reject a FOV with >= this artifact fraction (1 = off)
+  max_fold_frac: 1.0      # reject a FOV with >= this fold fraction (1 = off)
   # base colour renderings
   wb: true              # white-balanced (background neutralised to white)
   raw: true             # original colours
   # variants of each base
   plain: true           # clean image, no overlay
+  plain_bases: [wb, raw] # which bases get the plain copy (e.g. [wb] for wb+scalebar only)
   qc_overlay: true      # SABG+/artifact overlay burned in (green/red); needs results.csv
   qc_bases: [wb]        # which bases get a qc copy (default wb only -> no raw_qc)
+  # Jakub's 2-image FOV target: raw+overlay and wb+scalebar -> set plain_bases: [wb]
+  # and qc_bases: [raw] (with wb/raw/plain/qc_overlay all true).
   # output formats: jpg | png | tif. JPEG by default (full-res crops ~10x smaller).
   formats: [jpg]
   # Whole-section figures (downsampled), written to sections/ as <alias>_<variant>.

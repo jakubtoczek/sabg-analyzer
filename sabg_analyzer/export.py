@@ -53,11 +53,20 @@ class ExportParams:
     scalebar_label: bool = False   # draw the "100 µm" text above the bar
     n_fov: int = 5
     min_tissue_frac: float = 0.85
+    # FOV selection mode: "average" (near the section mean %SABG, default), "deciles"
+    # (10 FOVs spanning the 1st-10th deciles of FOV %SABG -> show the coloration range),
+    # or "n" (the n_fov cleanest FOVs, no %SABG targeting).
+    fov_select_mode: str = "average"
+    # Extra FOV constraints (>= rejects). Default 1.0 = off, so the legacy "average"
+    # behaviour is unchanged; deciles mode tightens these to 0.05 by its own defaults.
+    max_artifact_frac: float = 1.0
+    max_fold_frac: float = 1.0
     # Which base figures to write (two colour renderings of each FOV):
     wb: bool = True                # white-balanced (background neutralised)
     raw: bool = True               # original colours
     # For each base, which variants:
     plain: bool = True             # clean image, no overlay
+    plain_bases: tuple[str, ...] = ("wb", "raw")  # which bases get the plain copy
     qc_overlay: bool = True        # SABG+/artifact overlay burned in (green/red)
     qc_bases: tuple[str, ...] = ("wb",)  # which bases get a qc copy (default: wb only)
     # Output file formats. JPEG by default (FOV crops are full-res; JPEG ~10x smaller).
@@ -303,9 +312,12 @@ def _section_figures(out_dir: Path, alias: str, doc, scene, ov_rgb, ov_tissue,
 # ---------------------------------------------------------------------------
 # FOV selection (overview resolution)
 # ---------------------------------------------------------------------------
-def select_fovs(ov_rgb, ov_tissue, ov_pos, global_pct: float, n: int,
-                fov_ov: float, min_tissue: float = 0.85,
-                stride_frac: float = 0.5) -> list[dict]:
+def _fov_candidates(ov_rgb, ov_tissue, ov_pos, fov_ov: float, min_tissue: float,
+                    ov_art=None, ov_fold=None, max_artifact_frac: float = 1.0,
+                    max_fold_frac: float = 1.0, stride_frac: float = 0.5) -> list[dict]:
+    """All FOV windows passing the tissue (and optional artifact/fold) constraints, each
+    a dict with cx, cy, local_pct (%SABG of its tissue), tissue_frac and dark (a
+    fold/debris proxy). Shared by every selection mode."""
     H, W = ov_tissue.shape
     f = max(4, int(round(fov_ov)))
     half = f // 2
@@ -313,8 +325,10 @@ def select_fovs(ov_rgb, ov_tissue, ov_pos, global_pct: float, n: int,
     gray = ov_rgb.max(axis=2)
     tissue = ov_tissue.astype(bool)
     pos = ov_pos.astype(bool)
+    art = ov_art.astype(bool) if ov_art is not None else None
+    fold = ov_fold.astype(bool) if ov_fold is not None else None
 
-    cands = []
+    out: list[dict] = []
     for cy in range(half, H - half, stride):
         for cx in range(half, W - half, stride):
             ys = slice(cy - half, cy - half + f)
@@ -326,18 +340,70 @@ def select_fovs(ov_rgb, ov_tissue, ov_pos, global_pct: float, n: int,
             tcount = int(tm.sum())
             if tcount == 0:
                 continue
+            if (art is not None and max_artifact_frac < 1.0
+                    and float(art[ys, xs].mean()) >= max_artifact_frac):
+                continue
+            if (fold is not None and max_fold_frac < 1.0
+                    and float(fold[ys, xs].mean()) >= max_fold_frac):
+                continue
             local_pct = 100.0 * float((pos[ys, xs] & tm).sum()) / tcount
             dark = float(((gray[ys, xs] < 50) & tm).mean())   # folds/debris
-            cost = abs(local_pct - global_pct) + 100.0 * (1.0 - tfrac) + 200.0 * dark
-            cands.append((cost, cx, cy, local_pct, tfrac))
+            out.append({"cx": cx, "cy": cy, "local_pct": local_pct,
+                        "tissue_frac": tfrac, "dark": dark})
+    return out
 
-    cands.sort(key=lambda c: c[0])
+
+def select_fovs(ov_rgb, ov_tissue, ov_pos, global_pct: float | None, n: int,
+                fov_ov: float, min_tissue: float = 0.85, stride_frac: float = 0.5,
+                ov_art=None, ov_fold=None, max_artifact_frac: float = 1.0,
+                max_fold_frac: float = 1.0) -> list[dict]:
+    """FOVs near *global_pct* (the section mean %SABG) and clean. ``global_pct=None``
+    drops the %SABG targeting and picks the *n* cleanest FOVs ("n" mode)."""
+    f = max(4, int(round(fov_ov)))
+    cands = _fov_candidates(ov_rgb, ov_tissue, ov_pos, fov_ov, min_tissue,
+                            ov_art, ov_fold, max_artifact_frac, max_fold_frac, stride_frac)
+
+    def cost(c):
+        clean = 100.0 * (1.0 - c["tissue_frac"]) + 200.0 * c["dark"]
+        return clean if global_pct is None else abs(c["local_pct"] - global_pct) + clean
+
     chosen: list[dict] = []
-    for cost, cx, cy, lp, tf in cands:
-        if all(abs(cx - c["cx"]) >= f or abs(cy - c["cy"]) >= f for c in chosen):
-            chosen.append({"cx": cx, "cy": cy, "local_pct": lp, "tissue_frac": tf})
+    for c in sorted(cands, key=cost):
+        if all(abs(c["cx"] - ch["cx"]) >= f or abs(c["cy"] - ch["cy"]) >= f
+               for ch in chosen):
+            chosen.append(c)
         if len(chosen) >= n:
             break
+    return chosen
+
+
+def select_fovs_deciles(ov_rgb, ov_tissue, ov_pos, fov_ov: float,
+                        min_tissue: float = 0.85, ov_art=None, ov_fold=None,
+                        max_artifact_frac: float = 0.05, max_fold_frac: float = 0.05,
+                        stride_frac: float = 0.5) -> list[dict]:
+    """10 FOVs spanning the 1st-10th deciles of candidate %SABG (to show the coloration
+    range), vs select_fovs which clusters near the section mean. Same constraints, with
+    tighter artifact/fold defaults (0.05)."""
+    cands = _fov_candidates(ov_rgb, ov_tissue, ov_pos, fov_ov, min_tissue,
+                            ov_art, ov_fold, max_artifact_frac, max_fold_frac, stride_frac)
+    if not cands:
+        return []
+    f = max(4, int(round(fov_ov)))
+    vals = np.array([c["local_pct"] for c in cands])
+    targets = np.percentile(vals, [10, 20, 30, 40, 50, 60, 70, 80, 90, 100])
+    chosen: list[dict] = []
+    used: set[int] = set()
+    for t in targets:
+        order = sorted(range(len(cands)), key=lambda i: abs(cands[i]["local_pct"] - t))
+        pick = next((i for i in order if i not in used
+                     and all(abs(cands[i]["cx"] - ch["cx"]) >= f
+                             or abs(cands[i]["cy"] - ch["cy"]) >= f for ch in chosen)),
+                    None)
+        if pick is None:                         # all separated ones used -> closest free
+            pick = next((i for i in order if i not in used), None)
+        if pick is not None:
+            used.add(pick)
+            chosen.append(cands[pick])
     return chosen
 
 
@@ -527,8 +593,23 @@ def _export_scene(doc, s: SceneInfo, out_dir: Path, p: ExportParams, cfg, conv,
     fov_full = int(round(p.fov_um / s.pixel_size_um))  # full-res FOV side (px)
     fov_ov = fov_full * scale
 
-    fovs = select_fovs(ov_rgb, ov_tissue, ov_pos, global_pct, p.n_fov,
-                       fov_ov, p.min_tissue_frac)
+    # artifact/fold maps (maps-resolution, aligned with tissue/pos) for the FOV
+    # constraints; fold may be absent when fold detection is off.
+    ov_art = _load_map(maps_dir, alias, "artifact")
+    ov_art = (ov_art > 0) if ov_art is not None else None
+    ov_fold = _load_map(maps_dir, alias, "fold")
+    ov_fold = (ov_fold > 0) if ov_fold is not None else None
+
+    mode = getattr(p, "fov_select_mode", "average")
+    if mode == "deciles":
+        fovs = select_fovs_deciles(ov_rgb, ov_tissue, ov_pos, fov_ov, p.min_tissue_frac,
+                                   ov_art, ov_fold, p.max_artifact_frac, p.max_fold_frac)
+    else:
+        gp = None if mode == "n" else global_pct
+        fovs = select_fovs(ov_rgb, ov_tissue, ov_pos, gp, p.n_fov, fov_ov,
+                           p.min_tissue_frac, ov_art=ov_art, ov_fold=ov_fold,
+                           max_artifact_frac=p.max_artifact_frac,
+                           max_fold_frac=p.max_fold_frac)
 
     # whole-section figures (written even if no clean FOV was found)
     sec_written: list = []
@@ -569,11 +650,12 @@ def _export_scene(doc, s: SceneInfo, out_dir: Path, p: ExportParams, cfg, conv,
         # QC masks (recomputed on the raw crop) shared by all bases
         pos = art = None
         qc_bases = set(p.qc_bases)
+        plain_bases = set(getattr(p, "plain_bases", ("wb", "raw")))
         if p.qc_overlay and thr is not None:
             pos, art = _qc_masks(raw, conv, cfg, thr, thr_s, s.pixel_size_um)
 
         for tag, img in bases:
-            if p.plain:
+            if p.plain and tag in plain_bases:
                 written += _save(draw_scalebar(img, s.pixel_size_um, p.scalebar_um,
                                                label=p.scalebar_label),
                                  Path(str(base) + f"_{tag}"), p.formats)
