@@ -340,6 +340,50 @@ def value_to_slider(v0: float, v100: float, cur: float) -> float:
         return 0.0
     return max(0.0, min(100.0, 100.0 * (cur - v0) / (v100 - v0)))
 
+
+# Flat {(section, attr): (v0, v100)} of every guided knob, so the detection panel
+# can show a 0-100 "sensitivity" slider next to the raw entry of these fields.
+SENSITIVITY_KNOBS: dict[tuple[str, str], tuple[float, float]] = {
+    (section, attr): (v0, v100)
+    for _label, knobs in SLIDER_LAYERS
+    for section, attr, v0, v100, _klab in knobs
+}
+
+
+def _add_sensitivity_slider(parent, row: int, var: tk.StringVar,
+                            v0: float, v100: float) -> None:
+    """Add a 0-100 sensitivity ``ttk.Scale`` in column 2, two-way synced with the
+    raw-value entry *var* (left = detect less, right = more). A guard breaks the
+    slider<->entry feedback loop (same pattern as ``_AlphaControl``)."""
+    guard = {"on": False}
+    sv = tk.DoubleVar()
+    try:
+        sv.set(value_to_slider(v0, v100, float(var.get())))
+    except (ValueError, tk.TclError):
+        pass
+
+    def from_slider(_v=None) -> None:
+        if guard["on"]:
+            return
+        guard["on"] = True
+        var.set(f"{slider_to_value(v0, v100, sv.get()):.4g}")   # fires the entry trace
+        guard["on"] = False
+
+    def from_entry(*_a) -> None:
+        if guard["on"]:
+            return
+        try:
+            cur = float(var.get())
+        except (ValueError, tk.TclError):
+            return
+        guard["on"] = True
+        sv.set(value_to_slider(v0, v100, cur))
+        guard["on"] = False
+
+    ttk.Scale(parent, from_=0, to=100, variable=sv, command=from_slider,
+              length=90).grid(row=row, column=2, sticky="ew", padx=(4, 2))
+    var.trace_add("write", from_entry)
+
 # ---------------------------------------------------------------------------
 # "Other settings" (non-detection) groups -- for the Config window's 2nd tab.
 # ---------------------------------------------------------------------------
@@ -463,12 +507,15 @@ def _current_str(kind: str, cur) -> str:
 
 
 def build_field_rows(parent, cfg, fields, field_vars: dict, on_change: Callable,
-                     recompute: bool) -> None:
+                     recompute: bool, sensitivity: bool = False) -> None:
     """Lay out label+editor rows for *fields* into *parent* (a frame).
 
     ``field_vars[(section, attr)]`` is populated with the tk.Variable and
     ``on_change(section, attr, kind, recompute)`` is invoked on every edit.
+    When *sensitivity* is True, float fields in ``SENSITIVITY_KNOBS`` also get a
+    0-100 sensitivity slider (column 2) synced with their raw value.
     """
+    has_slider = False
     for row, spec in enumerate(fields):
         section, attr, kind, label, tip = spec[0], spec[1], spec[2], spec[3], spec[4]
         obj = getattr(cfg, section) if section else cfg
@@ -495,9 +542,16 @@ def build_field_rows(parent, cfg, fields, field_vars: dict, on_change: Callable,
             var.trace_add("write", lambda *_a, s=section, a=attr, k=kind, rc=recompute:
                           on_change(s, a, k, rc))
             w.grid(row=row, column=1, sticky="ew")
+            if (sensitivity and kind == "float"
+                    and (section, attr) in SENSITIVITY_KNOBS):
+                v0, v100 = SENSITIVITY_KNOBS[(section, attr)]
+                _add_sensitivity_slider(parent, row, var, v0, v100)
+                has_slider = True
         field_vars[(section, attr)] = var
         Tooltip(w, tip)
     parent.columnconfigure(1, weight=1)
+    if has_slider:
+        parent.columnconfigure(2, weight=1)
 
 
 def apply_field(cfg, section: str, attr: str, kind: str, var: tk.Variable) -> bool:
@@ -512,10 +566,13 @@ def apply_field(cfg, section: str, attr: str, kind: str, var: tk.Variable) -> bo
 
 
 def build_groups(parent, cfg, groups, field_vars: dict, on_change: Callable,
-                 recompute: bool, opened=None) -> list[CollapsibleFrame]:
+                 recompute: bool, opened=None,
+                 sensitivity: bool = False) -> list[CollapsibleFrame]:
     """Build one CollapsibleFrame per (title, fields, description) in *groups*.
 
     *opened* is an optional set/list of titles to start expanded (default: all).
+    *sensitivity* adds a 0-100 slider next to each guided float knob (see
+    ``build_field_rows``).
     """
     out = []
     for title, fields, desc in groups:
@@ -524,7 +581,8 @@ def build_groups(parent, cfg, groups, field_vars: dict, on_change: Callable,
         cf.pack(fill="x", expand=True, pady=2)
         grid = tk.Frame(cf.body, padx=4, pady=2)
         grid.pack(fill="x")
-        build_field_rows(grid, cfg, fields, field_vars, on_change, recompute)
+        build_field_rows(grid, cfg, fields, field_vars, on_change, recompute,
+                         sensitivity=sensitivity)
         out.append(cf)
     return out
 

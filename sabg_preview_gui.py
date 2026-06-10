@@ -109,7 +109,6 @@ class PreviewWindow(tk.Toplevel):
         self.field_vars: dict[tuple[str, str], tk.Variable] = {}
         self._photo_refs: list[tk.PhotoImage] = []         # keep picker thumbs alive
         self._dirty = False
-        self._slider_win: tk.Toplevel | None = None        # slider-setup popup
 
         # manual exclusion mask (preview-drawn, display-resolution uint8 0/255)
         self.brush_var = tk.StringVar(value="off")         # off | draw | erase
@@ -525,12 +524,9 @@ class PreviewWindow(tk.Toplevel):
         self.manual_entry.grid(row=0, column=2, sticky="w")
         self.manual_thr.trace_add("write", lambda *_: self._on_field_edit(recompute=True))
 
-        # guided "slider setup" mode (one sensitivity bar per layer)
-        tk.Button(body, text="🎚  Slider setup…", command=self.on_slider_setup).pack(
-            fill="x", padx=6, pady=(2, 4))
         # whole-section compute (real analyze_scene; heavy) -> caches + section stats
         tk.Button(body, text="▣  Compute whole section…",
-                  command=self.on_compute_section).pack(fill="x", padx=6, pady=(0, 4))
+                  command=self.on_compute_section).pack(fill="x", padx=6, pady=(2, 4))
 
         # layers panel (show / colour / alpha per layer); enabled on the ROI tab only
         lay = tk.LabelFrame(body, text="Layers (ROI overlay)", padx=6, pady=4)
@@ -538,10 +534,11 @@ class PreviewWindow(tk.Toplevel):
         self._layers_frame = lay
         gw.build_layers_panel(lay, self.cfg, self.show_vars, self._redraw)
 
-        # collapsible detection groups
+        # collapsible detection groups; guided knobs get a 0-100 sensitivity slider
+        # beside their raw value (left = detect less, right = more), two-way synced.
         gw.build_groups(body, self.cfg, gw.DETECTION_GROUPS, self.field_vars,
                         self._on_field, recompute=True,
-                        opened={"1. Tissue", "4. SABG detection"})
+                        opened={"1. Tissue", "4. SABG detection"}, sensitivity=True)
 
     # -- picker ------------------------------------------------------------
     def _populate_picker(self) -> None:
@@ -764,62 +761,6 @@ class PreviewWindow(tk.Toplevel):
         auto = self.manual_auto.get()
         self.manual_entry.configure(state="disabled" if auto else "normal")
         self._on_field_edit(recompute=True)
-
-    # -- slider-setup mode -------------------------------------------------
-    def on_slider_setup(self) -> None:
-        """Open a popup with one guided sensitivity bar per layer.
-
-        Each bar drives the same cfg knob(s) as the field rows (so the right panel
-        stays in sync) and the ROI auto-recomputes via the usual 250 ms debounce.
-        """
-        if self._slider_win is not None and self._slider_win.winfo_exists():
-            self._slider_win.lift()
-            return
-        win = tk.Toplevel(self)
-        self._slider_win = win
-        win.title("Slider setup — guided tuning")
-        win.geometry("440x420")
-        adv = tk.BooleanVar(value=False)
-        tk.Checkbutton(win, text="advanced (raw knobs)", variable=adv,
-                       command=lambda: self._build_sliders(body, adv)).pack(
-                           anchor="w", padx=10, side="bottom")
-        body = tk.Frame(win)
-        body.pack(fill="both", expand=True)
-        self._build_sliders(body, adv)
-
-    def _build_sliders(self, body: tk.Frame, adv: tk.BooleanVar) -> None:
-        for w in body.winfo_children():
-            w.destroy()
-        tk.Label(body, justify="left", fg="#555",
-                 text="Drag a layer's bar: left = detect less, right = more.\n"
-                      "The ROI recomputes automatically as you slide.").pack(
-                          anchor="w", padx=10, pady=(8, 4))
-        for label, knobs in gw.SLIDER_LAYERS:
-            frame = tk.LabelFrame(body, text=label, padx=6, pady=4)
-            frame.pack(fill="x", padx=8, pady=3)
-            used = knobs if adv.get() else knobs[:1]
-            for section, attr, v0, v100, klab in used:
-                row = tk.Frame(frame)
-                row.pack(fill="x")
-                tk.Label(row, text=(klab if adv.get() else "sensitivity"),
-                         width=14, anchor="w").pack(side="left")
-                obj = getattr(self.cfg, section) if section else self.cfg
-                init = gw.value_to_slider(v0, v100, float(getattr(obj, attr)))
-                sv = tk.DoubleVar(value=init)
-                ttk.Scale(row, from_=0, to=100, variable=sv,
-                          command=lambda val, se=section, at=attr, a=v0, b=v100:
-                          self._slider_apply(se, at, a, b, float(val))).pack(
-                              side="left", fill="x", expand=True, padx=4)
-
-    def _slider_apply(self, section, attr, v0, v100, s) -> None:
-        val = gw.slider_to_value(v0, v100, s)
-        key = (section, attr)
-        if key in self.field_vars:                  # keep the right panel in sync
-            self.field_vars[key].set(f"{val:.4g}")  # its trace marks dirty + recomputes
-        else:
-            obj = getattr(self.cfg, section) if section else self.cfg
-            setattr(obj, attr, val)
-            self._on_field_edit(recompute=True)
 
     def _schedule_recompute(self) -> None:
         if self._recompute_job is not None:
@@ -1075,7 +1016,10 @@ class PreviewWindow(tk.Toplevel):
              "scale bar. The Thumbnail tab exports the whole section (no overlay)."),
             ("Tuning (right panel)",
              "Edit any detection setting; the ROI recomputes after a short pause "
-             "(orange 'changed' → green 'up to date'). The Result panel shows %SABG, "
+             "(orange 'changed' → green 'up to date'). Key knobs (tissue texture, "
+             "SABG threshold, artifact/fold/edge sensitivity) show a 0-100 slider "
+             "beside the raw value — drag left to detect less, right to detect more; "
+             "the slider and the number stay in sync. The Result panel shows %SABG, "
              "thresholds, tissue%, pixel counts and mm² areas. Layers toggles which "
              "overlay masks are drawn / their colour + alpha."),
             ("Layers (ROI overlay)",
