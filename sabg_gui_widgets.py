@@ -71,10 +71,8 @@ class ScrollFrame(tk.Frame):
         self.interior = tk.Frame(self.canvas)
         self._win = self.canvas.create_window((0, 0), window=self.interior,
                                               anchor="nw")
-        self.interior.bind("<Configure>", lambda e: self.canvas.configure(
-            scrollregion=self.canvas.bbox("all")))
-        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(
-            self._win, width=e.width))
+        self.interior.bind("<Configure>", self._on_interior_configure)
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
         self.canvas.configure(yscrollcommand=sb.set)
         self.canvas.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
@@ -83,7 +81,27 @@ class ScrollFrame(tk.Frame):
                                                             self._on_wheel))
         self.bind("<Leave>", lambda e: self.canvas.unbind_all("<MouseWheel>"))
 
+    def _content_fits(self) -> bool:
+        """True when the interior is no taller than the visible canvas (nothing to
+        scroll), so view moves should be a no-op kept pinned to the top."""
+        bbox = self.canvas.bbox("all")
+        if not bbox:
+            return True
+        return (bbox[3] - bbox[1]) <= self.canvas.winfo_height()
+
+    def _on_interior_configure(self, _evt=None) -> None:
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        if self._content_fits():            # short content stays anchored at the top
+            self.canvas.yview_moveto(0.0)
+
+    def _on_canvas_configure(self, evt) -> None:
+        self.canvas.itemconfigure(self._win, width=evt.width)
+        if self._content_fits():
+            self.canvas.yview_moveto(0.0)
+
     def _on_wheel(self, event) -> None:
+        if self._content_fits():            # don't overscroll into blank space above
+            return
         self.canvas.yview_scroll(int(-event.delta / 120), "units")
 
 
@@ -320,10 +338,14 @@ LAYER_PANEL_SPEC = ([s for s in LAYER_SPEC if s[0] == "excluded"]
 
 # ---------------------------------------------------------------------------
 # "Slider setup" mode: one guided sensitivity bar per layer.
-# Each knob = (section, attr, value@0, value@100, label). The slider runs
-# 0 (detect LESS) -> 100 (detect MORE); value@0/value@100 bake in the direction
-# (e.g. texture_min DROPS as sensitivity rises). The first knob is the layer's
-# primary (simple mode); the rest appear only in "advanced (raw knobs)" mode.
+# Each knob = (section, attr, value@0, value@100, label); slider position 0 maps to
+# value@0 and 100 to value@100, so value@0/value@100 bake in the direction.
+# DETECTION stages (tissue, SABG+) run 0 (detect LESS) -> 100 (detect MORE).
+# REJECTION stages (artifact, fold, edge-reject; see REJECT_SLIDER_LABELS) run
+# 0 (reject LESS) -> 100 (reject MORE), so all three rejection sliders agree:
+# right = strip more positives. e.g. texture_min DROPS as detection rises; edge
+# teal_keep RISES as rejection rises (a higher teal_keep protects FEWER pixels, so
+# rejects more). The first knob drives the slider position; the rest follow.
 # Mappings + ranges per the session-7 handover §8 (centred on the config defaults).
 SLIDER_LAYERS = [
     ("tissue", [("tissue", "texture_min", 0.012, 0.001, "texture_min"),
@@ -332,7 +354,9 @@ SLIDER_LAYERS = [
                ("detection", "hyst_low_scale", 0.90, 0.20, "hyst_low_scale")]),
     ("artifact", [("artifact", "dark_level", 0.30, 0.60, "dark_level")]),
     ("fold", [("fold", "score_min", 0.15, 0.02, "score_min")]),
-    ("edge-reject", [("edge", "teal_keep", 0.20, 0.02, "teal_keep")]),
+    # edge teal_keep RISES with the slider so right = reject MORE (was inverted at
+    # 0.20->0.02, which made slider-right reject LESS, opposite of artifact/fold).
+    ("edge-reject", [("edge", "teal_keep", 0.02, 0.20, "teal_keep")]),
 ]
 
 
@@ -621,12 +645,18 @@ SECTION_SLIDERS = {
 }
 _SLIDER_KNOBS_BY_LABEL = dict(SLIDER_LAYERS)        # label -> [(section, attr, v0, v100, klab), ...]
 
+# Rejection stages: their composite slider reads "reject less -> reject more" (right
+# = strip more positives), vs detection stages ("detect less -> detect more"). Used
+# to label the slider and its tooltip correctly per stage.
+REJECT_SLIDER_LABELS = {"artifact", "fold", "edge-reject"}
 
-def _add_composite_slider(parent, knobs, field_vars: dict) -> None:
-    """One 0-100 sensitivity slider driving EVERY knob in *knobs* together (left =
-    detect less, right = more). Each knob's field var must already be in *field_vars*
-    (build the raw rows first). Editing the primary (first) knob re-derives the slider
-    position; a guard breaks the slider<->entry feedback loop."""
+
+def _add_composite_slider(parent, knobs, field_vars: dict, reject: bool = False) -> None:
+    """One 0-100 slider driving EVERY knob in *knobs* together. Detection stages read
+    left = detect less, right = detect more; *reject* stages (artifact/fold/edge) read
+    left = reject less, right = reject more. Each knob's field var must already be in
+    *field_vars* (build the raw rows first). Editing the primary (first) knob re-derives
+    the slider position; a guard breaks the slider<->entry feedback loop."""
     guard = {"on": False}
     sv = tk.DoubleVar()
     p_sec, p_attr, p_v0, p_v100 = knobs[0][0], knobs[0][1], knobs[0][2], knobs[0][3]
@@ -662,19 +692,71 @@ def _add_composite_slider(parent, knobs, field_vars: dict) -> None:
         sv.set(value_to_slider(p_v0, p_v100, cur))
         guard["on"] = False
 
-    tk.Label(parent, text="detect less", fg="#888", font=("Segoe UI", 7)).grid(
+    verb = "reject" if reject else "detect"
+    tip = ("Drives " + ", ".join(k[4] for k in knobs)
+           + f" together (left = {verb} less, right = {verb} more).")
+    tk.Label(parent, text=f"{verb} less", fg="#888", font=("Segoe UI", 7)).grid(
         row=0, column=0, sticky="e")
-    ttk.Scale(parent, from_=0, to=100, variable=sv, command=from_slider,
-              length=150).grid(row=0, column=1, sticky="ew", padx=3)
-    tk.Label(parent, text="more", fg="#888", font=("Segoe UI", 7)).grid(
+    scale = ttk.Scale(parent, from_=0, to=100, variable=sv, command=from_slider,
+                      length=150)
+    scale.grid(row=0, column=1, sticky="ew", padx=3)
+    tk.Label(parent, text=f"{verb} more", fg="#888", font=("Segoe UI", 7)).grid(
         row=0, column=2, sticky="w")
-    lbl = tk.Label(parent, text="sensitivity", anchor="w", font=("Segoe UI", 8, "bold"))
+    lbl = tk.Label(parent, text="strength" if reject else "sensitivity",
+                   anchor="w", font=("Segoe UI", 8, "bold"))
     lbl.grid(row=1, column=0, columnspan=3, sticky="w")
-    Tooltip(lbl, "Drives " + ", ".join(k[4] for k in knobs)
-            + " together (left = detect less, right = more).")
+    Tooltip(lbl, tip)
+    Tooltip(scale, tip)                  # hover help on the slider itself (B4)
     parent.columnconfigure(1, weight=1)
     if primary_var is not None:
         primary_var.trace_add("write", from_primary)
+
+
+_DEFAULT_PARAMS_CACHE: dict | None = None
+
+
+def _default_param_instances() -> dict:
+    """Fresh dataclass instances holding the program defaults for each config block a
+    detection stage edits. Imported lazily so this pure-Tk module stays importable
+    without the analysis package loaded at import time (and avoids any import cycle)."""
+    global _DEFAULT_PARAMS_CACHE
+    if _DEFAULT_PARAMS_CACHE is None:
+        from sabg_analyzer.tissue import ArtifactParams, TissueParams
+        from sabg_analyzer.fold import FoldParams
+        from sabg_analyzer.edge import EdgeFilterParams
+        from sabg_analyzer.threshold import ThresholdParams
+        from sabg_analyzer.config import DetectionParams
+        _DEFAULT_PARAMS_CACHE = {
+            "tissue": TissueParams(), "artifact": ArtifactParams(),
+            "fold": FoldParams(), "edge": EdgeFilterParams(),
+            "detection": DetectionParams(), "threshold": ThresholdParams(),
+        }
+    return _DEFAULT_PARAMS_CACHE
+
+
+def _reset_section_fields(cfg, fields, field_vars: dict, on_change: Callable,
+                          recompute: bool) -> None:
+    """Restore every field in *fields* to its dataclass default, updating both the
+    on-screen var and cfg (via *on_change*) so the composite slider re-syncs and a
+    single debounced recompute runs. Each displayed field is reset to ITS OWN block's
+    default (the Tissue stage shows ``artifact.erode_px``, the SABG stage spans
+    ``detection`` + ``threshold``), so we look the default up per (section, attr).
+    bool/choice editors don't fire on ``var.set``, so on_change is called explicitly."""
+    defaults = _default_param_instances()
+    for spec in fields:
+        section, attr, kind = spec[0], spec[1], spec[2]
+        d = defaults.get(section)
+        if d is None or not hasattr(d, attr):
+            continue
+        var = field_vars.get((section, attr))
+        if var is None:
+            continue
+        dv = getattr(d, attr)
+        if kind == "bool":
+            var.set(bool(dv))
+        else:
+            var.set(_current_str(kind, dv))
+        on_change(section, attr, kind, recompute)
 
 
 def build_detection_sections(parent, cfg, field_vars: dict, on_change: Callable,
@@ -691,22 +773,34 @@ def build_detection_sections(parent, cfg, field_vars: dict, on_change: Callable,
     for title, fields, desc in DETECTION_GROUPS:
         sec = tk.LabelFrame(parent, text=title, padx=4, pady=3)
         sec.pack(fill="x", expand=True, pady=3)
+        # header row: per-stage "Reset" restoring this stage's displayed fields to the
+        # program defaults (packed first so it sits at the stage's top-right).
+        hdr = tk.Frame(sec)
+        hdr.pack(fill="x")
+        rbtn = tk.Button(hdr, text="Reset", font=("Segoe UI", 7), padx=4, pady=0,
+                         command=lambda f=fields: _reset_section_fields(
+                             cfg, f, field_vars, on_change, recompute))
+        rbtn.pack(side="right")
+        Tooltip(rbtn, "Reset this stage's settings to the program defaults.")
         if desc:
             tk.Label(sec, text=desc, fg="#666", font=("Segoe UI", 7),
                      wraplength=320, justify="left", anchor="w").pack(fill="x")
         # details expander -- built first (populates field_vars) but packed last so it
         # sits below the slider/extra controls.
         det = CollapsibleFrame(sec, "details", opened=False)
+        Tooltip(det._btn, "Show or hide this stage's raw parameters.")
         grid = tk.Frame(det.body, padx=2, pady=2)
         grid.pack(fill="x")
         build_field_rows(grid, cfg, fields, field_vars, on_change, recompute,
                          sensitivity=False)
         if title in SECTION_SLIDERS:
-            knobs = _SLIDER_KNOBS_BY_LABEL.get(SECTION_SLIDERS[title])
+            slabel = SECTION_SLIDERS[title]
+            knobs = _SLIDER_KNOBS_BY_LABEL.get(slabel)
             if knobs:
                 srow = tk.Frame(sec, padx=2)
                 srow.pack(fill="x", pady=(2, 0))
-                _add_composite_slider(srow, knobs, field_vars)
+                _add_composite_slider(srow, knobs, field_vars,
+                                      reject=slabel in REJECT_SLIDER_LABELS)
         if title in section_extra:
             ex = tk.Frame(sec, padx=2)
             ex.pack(fill="x", pady=(2, 0))
