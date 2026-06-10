@@ -311,6 +311,13 @@ LAYER_SPEC = [
 LAYER_LABELS = {"nontissue": "non-tissue", "excluded": "excluded", "artifact": "artifact",
                 "fold": "fold", "sabg": "SABG+", "edge_removed": "edge-rejected"}
 
+# The Layers *panel* lists 'excluded' above 'non-tissue' (Jakub's preference); this is
+# display order only. The overlay COMPOSITE order stays `LAYER_SPEC` (non-tissue first,
+# excluded painted on top of it), so reordering the panel can't hide excluded where the
+# two masks overlap.
+LAYER_PANEL_SPEC = ([s for s in LAYER_SPEC if s[0] == "excluded"]
+                    + [s for s in LAYER_SPEC if s[0] != "excluded"])
+
 # ---------------------------------------------------------------------------
 # "Slider setup" mode: one guided sensitivity bar per layer.
 # Each knob = (section, attr, value@0, value@100, label). The slider runs
@@ -637,7 +644,7 @@ def build_layers_panel(parent, cfg, show_vars: dict, on_change: Callable) -> Non
     redraw-only callback). ``show_vars[key]`` holds each show toggle.
     """
     ov = cfg.overlay
-    for i, (key, color_attr, alpha_attr, default) in enumerate(LAYER_SPEC):
+    for i, (key, color_attr, alpha_attr, default) in enumerate(LAYER_PANEL_SPEC):
         sv = tk.BooleanVar(value=default)
         show_vars[key] = sv
         tk.Checkbutton(parent, variable=sv, command=on_change).grid(
