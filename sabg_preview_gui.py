@@ -100,6 +100,7 @@ class PreviewWindow(tk.Toplevel):
 
         self.manual_auto = tk.BooleanVar(value=True)       # auto threshold on ROI
         self.manual_thr = tk.StringVar(value="")
+        self.auto_recompute = tk.BooleanVar(value=True)    # debounced auto-recompute
         self.view_res = tk.StringVar()                     # px/µm label (supersedes gui.preview_hi_res)
         self._res_to_mult: dict[str, int] = {}             # label -> thumb multiplier
         self._loaded_um: float | None = None               # achieved µm/px of the shown image
@@ -631,17 +632,23 @@ class PreviewWindow(tk.Toplevel):
         sf.pack(fill="both", expand=True)
         body = sf.interior
 
-        # top controls
+        # top controls -- row 1: Recompute + auto + dirty dot; row 2: Export → config.
         top = tk.Frame(body, padx=6, pady=6)
         top.pack(fill="x")
-        self.btn_recompute = tk.Button(top, text="↻  Recompute", font=("Segoe UI", 10, "bold"),
+        row1 = tk.Frame(top)
+        row1.pack(fill="x")
+        self.btn_recompute = tk.Button(row1, text="↻  Recompute", font=("Segoe UI", 10, "bold"),
                                        bg="#3a7d44", fg="white", activebackground="#2f6638",
-                                       command=self.request_recompute)
+                                       command=self.request_recompute, state="disabled")
         self.btn_recompute.pack(side="left", fill="x", expand=True)
-        self.dirty_dot = tk.Label(top, text="✓ up to date", fg="#3a7d44",
+        tk.Checkbutton(row1, text="auto", variable=self.auto_recompute,
+                       command=self._on_auto_toggle).pack(side="left", padx=4)
+        self.dirty_dot = tk.Label(row1, text="✓ up to date", fg="#3a7d44",
                                   font=("Segoe UI", 9, "bold"))
         self.dirty_dot.pack(side="left", padx=4)
-        tk.Button(top, text="Export → config", command=self.on_export).pack(side="left", padx=2)
+        row2 = tk.Frame(top)
+        row2.pack(fill="x", pady=(4, 0))
+        tk.Button(row2, text="Export → config", command=self.on_export).pack(side="left")
 
         # result characteristics (filled after each recompute / whole-section run)
         res = tk.LabelFrame(body, text="Result", padx=6, pady=4)
@@ -887,10 +894,20 @@ class PreviewWindow(tk.Toplevel):
 
     def _on_field_edit(self, recompute) -> None:
         self._mark_dirty()
-        if recompute:
-            self._schedule_recompute()
-        else:
+        if not recompute:
             self._redraw()
+        elif self.auto_recompute.get():
+            self._schedule_recompute()
+        # auto off: stay dirty (yellow) until the user presses Recompute.
+
+    def _on_auto_toggle(self) -> None:
+        """Auto on (default): debounced auto-recompute, Recompute button disabled. Auto
+        off: edits just mark dirty; the user presses Recompute. Re-enabling auto while
+        dirty catches up immediately."""
+        auto = self.auto_recompute.get()
+        self.btn_recompute.configure(state="disabled" if auto else "normal")
+        if auto and self._dirty:
+            self._schedule_recompute()
 
     def _mark_dirty(self) -> None:
         self._dirty = True
@@ -1013,8 +1030,12 @@ class PreviewWindow(tk.Toplevel):
         if lay is None:
             return
         self._clear_dirty()
-        if self.manual_auto.get():          # reflect the auto threshold back
-            self.manual_thr.set(f"{lay['thr']:.4f}")
+        if self.manual_auto.get():          # reflect the auto threshold back (no recompute)
+            self._reflecting = True         # the manual_thr trace must not re-mark dirty
+            try:
+                self.manual_thr.set(f"{lay['thr']:.4f}")
+            finally:
+                self._reflecting = False
         t = lay["tissue"]
         pct = 100.0 * lay["sabg"].sum() / t.sum() if t.any() else 0.0
         self.status.configure(
@@ -1124,12 +1145,26 @@ class PreviewWindow(tk.Toplevel):
         except Exception as exc:
             messagebox.showerror("Export failed", str(exc), parent=self)
 
+    def _persist_manual_seed(self) -> None:
+        """Carry a dialed-in manual seed (Auto off + valid number) for the current
+        section into the batch config as scenes.<key>.threshold (used as thr_override by
+        analyze). The per-ROI value becomes the section's fixed seed; Auto on leaves any
+        existing per-scene override untouched."""
+        if self.entry is None or self.manual_auto.get():
+            return
+        try:
+            val = float(self.manual_thr.get())
+        except (ValueError, tk.TclError):
+            return
+        self.cfg.scenes.setdefault(self.entry.scene.key, {})["threshold"] = val
+
     def on_export(self) -> None:
         dst = self.config_path
         if dst.exists() and not messagebox.askyesno(
                 "Overwrite config?", f"Overwrite\n{dst}\nwith the current settings?",
                 parent=self):
             return
+        self._persist_manual_seed()
         try:
             dst.parent.mkdir(parents=True, exist_ok=True)
             preview.export_config(self.cfg, dst)
