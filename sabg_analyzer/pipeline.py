@@ -290,9 +290,11 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
     # confident seed; pass 2 uses this only to gate faint full-res positives. Full-res
     # seeds are always counted, so the HD mean-pool never loses punctate signal.
     hd_tissue = segment_tissue(hd_rgb, tcfg)   # computed here, reused for the maps below
+    hd_excl = None
     if excl is not None:                        # same exclusion on the maps/HD canvas
-        hd_tissue = hd_tissue & ~cv2.resize(
-            excl.astype(np.uint8), (Wh, Hh), interpolation=cv2.INTER_NEAREST).astype(bool)
+        hd_excl = cv2.resize(excl.astype(np.uint8), (Wh, Hh),
+                             interpolation=cv2.INTER_NEAREST).astype(bool)
+        hd_tissue = hd_tissue & ~hd_excl
     hyst_on = cfg.detection.hysteresis
     low_thr = thr * cfg.detection.hyst_low_scale if hyst_on else thr
     hd_keep = None
@@ -419,6 +421,9 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
         if cfg.edge.enabled:
             mp = maps_dir / f"{alias}_edge.png"
             cv2.imwrite(str(mp), hd_edge.astype(np.uint8) * 255); written.append(mp)
+        if hd_excl is not None:                 # manual exclusion mask (overlay layer)
+            mp = maps_dir / f"{alias}_excluded.png"
+            cv2.imwrite(str(mp), hd_excl.astype(np.uint8) * 255); written.append(mp)
 
     # The whole-section QC overlay now lives in sections/ (rendered by `export` from
     # the maps written above), so analyze no longer writes a standalone overlays/.
@@ -779,7 +784,9 @@ def _build_config_snapshot(cfg: Config, rows: list[dict]) -> dict:
                     "show_edge_rejected": cfg.overlay.show_edge_rejected,
                     "nontissue_color": list(cfg.overlay.nontissue_color),
                     "nontissue_alpha": cfg.overlay.nontissue_alpha,
-                    "show_nontissue": cfg.overlay.show_nontissue},
+                    "show_nontissue": cfg.overlay.show_nontissue,
+                    "excluded_color": list(cfg.overlay.excluded_color),
+                    "excluded_alpha": cfg.overlay.excluded_alpha},
         "output": {"debug": cfg.output.debug,
                    "maps": cfg.output.maps,
                    "keep_maps": cfg.output.keep_maps,

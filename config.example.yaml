@@ -203,6 +203,8 @@ overlay:
   nontissue_color: [150, 150, 150]  # RGB shade for glass/background (grey)
   nontissue_alpha: 0.50        # non-tissue shade strength (0-1; higher = easier to see)
   show_nontissue: true         # shade non-tissue so the tissue mask can be audited
+  excluded_color: [255, 0, 255]  # RGB highlight for the manual exclusion mask (magenta)
+  excluded_alpha: 0.55         # exclusion blend strength (0-1)
 
 # ---- Which image outputs `analyze` writes ---------------------------------
 # results.csv and the config.yaml snapshot are always written. Turn off any of

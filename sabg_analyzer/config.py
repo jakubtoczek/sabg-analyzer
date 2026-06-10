@@ -55,6 +55,8 @@ class OverlayParams:
     nontissue_color: tuple[int, int, int] = (150, 150, 150)  # glass/background (grey)
     nontissue_alpha: float = 0.50                       # non-tissue shade strength
     show_nontissue: bool = True                         # shade non-tissue to audit the mask
+    excluded_color: tuple[int, int, int] = (255, 0, 255)  # manual exclusion mask (magenta)
+    excluded_alpha: float = 0.55                        # exclusion blend strength
 
 
 @dataclass
@@ -232,6 +234,10 @@ def load_config(path: str | Path | None) -> Config:
             cfg.overlay.nontissue_alpha = float(ov["nontissue_alpha"])
         if ov.get("show_nontissue") is not None:
             cfg.overlay.show_nontissue = bool(ov["show_nontissue"])
+        if "excluded_color" in ov:
+            cfg.overlay.excluded_color = tuple(ov["excluded_color"])
+        if ov.get("excluded_alpha") is not None:
+            cfg.overlay.excluded_alpha = float(ov["excluded_alpha"])
     if "output" in raw and raw["output"]:
         _update_dataclass(cfg.output, raw["output"])
     if "progress" in raw and raw["progress"]:

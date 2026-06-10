@@ -197,7 +197,8 @@ def compute_roi_layers(rgb: np.ndarray, cfg: Config, pixel_size_um: float | None
 
     Returns a dict of boolean masks (all the same H×W as *rgb*) plus the thresholds:
     ``tissue`` (countable), ``region`` (full tissue blob), ``artifact``, ``fold``,
-    ``sabg``, ``edge_removed``, ``nontissue``, and ``thr`` / ``thr_s``.
+    ``sabg``, ``edge_removed``, ``nontissue`` (glass only), ``excluded`` (the manual
+    exclusion mask), and ``thr`` / ``thr_s``.
     The mask order matches `pipeline.analyze_scene` exactly (it calls the same
     `compute_region_masks` / `detect_sabg`), so what you tune here is what analysis does.
 
@@ -206,9 +207,8 @@ def compute_roi_layers(rgb: np.ndarray, cfg: Config, pixel_size_um: float | None
     leaves both the numerator and the denominator exactly as the pipeline does.
     """
     tcfg = cfg.tissue
-    region = segment_tissue(rgb, tcfg)
-    if exclude is not None:
-        region = region & ~exclude
+    region_full = segment_tissue(rgb, tcfg)        # tissue before manual exclusion
+    region = region_full & ~exclude if exclude is not None else region_full
     conv = _roi_conv(rgb, cfg, region)
     region_c = (erode_mask(region, cfg.artifact.erode_px)
                 if cfg.artifact.enabled else region)
@@ -232,7 +232,9 @@ def compute_roi_layers(rgb: np.ndarray, cfg: Config, pixel_size_um: float | None
         "fold": fold,
         "sabg": d["sabg"],
         "edge_removed": d["edge_removed"],
-        "nontissue": ~region,
+        "nontissue": ~region_full,          # glass/background only (not the excluded region)
+        "excluded": (exclude if exclude is not None
+                     else np.zeros(region_full.shape, bool)),
         "thr": thr,
         "thr_s": thr_s,
     }

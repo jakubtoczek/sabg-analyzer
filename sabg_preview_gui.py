@@ -179,9 +179,9 @@ class PreviewWindow(tk.Toplevel):
         self.res_label.pack(side="left", padx=(6, 0))
         self._add_shared_tools(bar, "thumb")
 
-        # second row: manual exclusion brush (paint regions out of numerator+denominator)
-        bar2 = tk.Frame(tab)
-        bar2.pack(fill="x")
+        # manual exclusion brush in a collapsed strip (paint regions out of
+        # numerator+denominator; rarely needed, e.g. muscle next to tumour)
+        bar2 = self._collapsible_strip(bar, tab, "✏ exclusion")
         tk.Label(bar2, text="exclusion:").pack(side="left", padx=(2, 2))
         for txt, val in (("off", "off"), ("draw ✏", "draw"), ("erase ⌫", "erase")):
             tk.Radiobutton(bar2, text=txt, value=val, variable=self.brush_var,
@@ -241,20 +241,42 @@ class PreviewWindow(tk.Toplevel):
         sel = getattr(self, "selector", None)
         return self.brush_mode is None and not (sel is not None and sel.get_active())
 
+    def _collapsible_strip(self, toolbar: tk.Frame, parent: tk.Frame,
+                           label: str) -> tk.Frame:
+        """A horizontal strip (packed under *toolbar* in *parent* when expanded),
+        toggled by a button on *toolbar*. Collapsed by default — for rarely-used
+        controls (scale bar, exclusion brush)."""
+        strip = tk.Frame(parent)
+        btn = tk.Button(toolbar, relief="groove")
+
+        def toggle():
+            if strip.winfo_manager():
+                strip.pack_forget()
+                btn.configure(text=f"{label} ▸")
+            else:
+                strip.pack(fill="x", after=toolbar)
+                btn.configure(text=f"{label} ▾")
+
+        btn.configure(text=f"{label} ▸", command=toggle)
+        btn.pack(side="left", padx=(8, 2))
+        return strip
+
     def _add_shared_tools(self, bar: tk.Frame, source: str) -> None:
-        """Controls present on BOTH tabs, in the same order: Reset view, white
-        balance toggle, scale-bar (length/label/corner + preview), Save, Help."""
+        """Controls present on BOTH tabs: Reset view, white-balance toggle, a
+        collapsible scale-bar strip (length/label/corner + preview), Export, Help."""
         tk.Button(bar, text="Reset view",
                   command=lambda: self._nav(source).reset()).pack(side="left", padx=(10, 2))
         tk.Checkbutton(bar, text="white-balanced", variable=self.wb_on,
                        command=self._on_wb_toggle).pack(side="left", padx=(8, 2))
-        tk.Label(bar, text="bar").pack(side="left", padx=(8, 0))
-        ttk.OptionMenu(bar, self.sb_len, self.sb_len.get(), "Auto", "50", "100",
+        # scale-bar controls live in a collapsed strip (rarely changed)
+        sb = self._collapsible_strip(bar, bar.master, "⚖ scale bar")
+        tk.Label(sb, text="bar").pack(side="left", padx=(8, 0))
+        ttk.OptionMenu(sb, self.sb_len, self.sb_len.get(), "Auto", "50", "100",
                        "200", "500", "1000").pack(side="left")
-        tk.Checkbutton(bar, text="label", variable=self.sb_label).pack(side="left")
-        ttk.OptionMenu(bar, self.sb_pos, self.sb_pos.get(),
+        tk.Checkbutton(sb, text="label", variable=self.sb_label).pack(side="left")
+        ttk.OptionMenu(sb, self.sb_pos, self.sb_pos.get(),
                        *_SB_POS.keys()).pack(side="left")
-        cvp = tk.Canvas(bar, width=24, height=16, highlightthickness=1,
+        cvp = tk.Canvas(sb, width=24, height=16, highlightthickness=1,
                         highlightbackground="#aaa", bg="white")
         cvp.pack(side="left", padx=4)
         self._sb_preview_canvases.append(cvp)

@@ -172,7 +172,7 @@ def draw_dashed_rect(img, p1, p2, color, thickness=2, dash=14) -> None:
 # Overlay layer-set "profiles" selectable per section variant (later layers paint
 # on top). A variant whose tokens include one of these keys draws that layer set.
 OVERLAY_PROFILES = {
-    "overlay": ["nontissue", "artifact", "fold", "edge", "pos", "pos_fold"],
+    "overlay": ["nontissue", "excluded", "artifact", "fold", "edge", "pos", "pos_fold"],
     "overlaysabg": ["pos", "pos_fold"],   # SABG positives only (incl. inside folds)
 }
 
@@ -232,10 +232,12 @@ def _section_figures(out_dir: Path, alias: str, doc, scene, ov_rgb, ov_tissue,
 
     tissue = _rz(ov_tissue); pos = _rz(ov_pos)
     art = _m("artifact"); fold = _m("fold"); edge = _m("edge"); pos_fold = _m("pos_fold")
+    excluded = _m("excluded")            # manual exclusion mask (only if analyze wrote it)
     nontissue = (~tissue) & (base.max(axis=2) > cfg.tissue.gap_level)
 
     layer_specs = {
         "nontissue": (nontissue, cfg.overlay.nontissue_color, cfg.overlay.nontissue_alpha),
+        "excluded": (excluded, cfg.overlay.excluded_color, cfg.overlay.excluded_alpha),
         "artifact": (art, cfg.overlay.artifact_color, cfg.overlay.artifact_alpha),
         "fold": (fold, cfg.overlay.fold_color, cfg.overlay.fold_alpha),
         "edge": (edge, cfg.overlay.edge_color, cfg.overlay.edge_alpha),

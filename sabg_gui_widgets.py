@@ -302,13 +302,14 @@ DETECTION_GROUPS = [
 # Layers drawn in pipeline order: (key, colour attr, alpha attr, default show).
 LAYER_SPEC = [
     ("nontissue", "nontissue_color", "nontissue_alpha", True),
+    ("excluded", "excluded_color", "excluded_alpha", True),
     ("artifact", "artifact_color", "artifact_alpha", True),
     ("fold", "fold_color", "fold_alpha", True),
     ("sabg", "sabg_color", "sabg_alpha", True),
     ("edge_removed", "edge_color", "edge_alpha", True),
 ]
-LAYER_LABELS = {"nontissue": "non-tissue", "artifact": "artifact", "fold": "fold",
-                "sabg": "SABG+", "edge_removed": "edge-rejected"}
+LAYER_LABELS = {"nontissue": "non-tissue", "excluded": "excluded", "artifact": "artifact",
+                "fold": "fold", "sabg": "SABG+", "edge_removed": "edge-rejected"}
 
 # ---------------------------------------------------------------------------
 # "Slider setup" mode: one guided sensitivity bar per layer.
