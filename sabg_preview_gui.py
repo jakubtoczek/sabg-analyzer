@@ -113,6 +113,8 @@ class PreviewWindow(tk.Toplevel):
         self.field_vars: dict[tuple[str, str], tk.Variable] = {}
         self._photo_refs: list[tk.PhotoImage] = []         # keep picker thumbs alive
         self._dirty = False
+        self._reflecting = False                           # suppress recompute while
+        #                          reflecting the auto threshold back into the seed box
 
         # manual exclusion mask (preview-drawn, display-resolution uint8 0/255)
         self.brush_var = tk.StringVar(value="off")         # off | draw | erase
@@ -649,17 +651,6 @@ class PreviewWindow(tk.Toplevel):
                                     fg="#333")
         self.stats_label.pack(fill="x")
 
-        # threshold override
-        thr = tk.LabelFrame(body, text="Seed threshold", padx=6, pady=4)
-        thr.pack(fill="x", padx=6, pady=2)
-        tk.Checkbutton(thr, text="Auto on ROI", variable=self.manual_auto,
-                       command=self._on_manual_toggle).grid(row=0, column=0, sticky="w")
-        tk.Label(thr, text="manual:").grid(row=0, column=1, sticky="e")
-        self.manual_entry = tk.Entry(thr, textvariable=self.manual_thr, width=10,
-                                     state="disabled")
-        self.manual_entry.grid(row=0, column=2, sticky="w")
-        self.manual_thr.trace_add("write", lambda *_: self._on_field_edit(recompute=True))
-
         # whole-section compute (real analyze_scene; heavy) -> caches + section stats
         tk.Button(body, text="▣  Compute whole section…",
                   command=self.on_compute_section).pack(fill="x", padx=6, pady=(2, 4))
@@ -670,11 +661,24 @@ class PreviewWindow(tk.Toplevel):
         self._layers_frame = lay
         gw.build_layers_panel(lay, self.cfg, self.show_vars, self._redraw)
 
-        # collapsible detection groups; guided knobs get a 0-100 sensitivity slider
-        # beside their raw value (left = detect less, right = more), two-way synced.
-        gw.build_groups(body, self.cfg, gw.DETECTION_GROUPS, self.field_vars,
-                        self._on_field, recompute=True,
-                        opened={"1. Tissue", "4. SABG detection"}, sensitivity=True)
+        # Detection stages: each ALWAYS open with one composite sensitivity slider
+        # (left = detect less, right = more), the raw parameters behind a per-section
+        # "details" expander. The per-ROI seed threshold lives in the SABG section.
+        gw.build_detection_sections(
+            body, self.cfg, self.field_vars, self._on_field, recompute=True,
+            section_extra={"4. SABG detection": self._build_seed_controls})
+
+    def _build_seed_controls(self, parent: tk.Frame) -> None:
+        """Per-ROI seed-threshold controls, injected into "4. SABG detection". Auto
+        (default) estimates the seed on the current ROI's tissue; untick to type a
+        manual seed (persisted as scenes.<key>.threshold on Export → config)."""
+        tk.Checkbutton(parent, text="Seed: Auto on ROI", variable=self.manual_auto,
+                       command=self._on_manual_toggle).grid(row=0, column=0, sticky="w")
+        tk.Label(parent, text="manual:").grid(row=0, column=1, sticky="e", padx=(8, 2))
+        self.manual_entry = tk.Entry(parent, textvariable=self.manual_thr, width=10,
+                                     state="disabled")
+        self.manual_entry.grid(row=0, column=2, sticky="w")
+        self.manual_thr.trace_add("write", lambda *_: self._on_manual_seed_edit())
 
     # -- picker ------------------------------------------------------------
     def _populate_picker(self) -> None:
@@ -897,6 +901,13 @@ class PreviewWindow(tk.Toplevel):
         self._dirty = False
         self.dirty_dot.configure(text="✓ up to date", fg="#3a7d44")
         self.btn_recompute.configure(bg="#3a7d44", activebackground="#2f6638")
+
+    def _on_manual_seed_edit(self) -> None:
+        """Manual-seed entry changed → recompute (unless we're reflecting the auto
+        threshold back into the box; see `_after_layers`)."""
+        if getattr(self, "_reflecting", False):
+            return
+        self._on_field_edit(recompute=True)
 
     def _on_manual_toggle(self) -> None:
         auto = self.manual_auto.get()
@@ -1162,13 +1173,27 @@ class PreviewWindow(tk.Toplevel):
              "white-balanced + scale bar, and (ROI tab) white-balanced + overlay + "
              "scale bar. The Thumbnail tab exports the whole section (no overlay)."),
             ("Tuning (right panel)",
-             "Edit any detection setting; the ROI recomputes after a short pause "
-             "(orange 'changed' → green 'up to date'). Key knobs (tissue texture, "
-             "SABG threshold, artifact/fold/edge sensitivity) show a 0-100 slider "
-             "beside the raw value — drag left to detect less, right to detect more; "
-             "the slider and the number stay in sync. The Result panel shows %SABG, "
-             "thresholds, tissue%, pixel counts and mm² areas. Layers toggles which "
-             "overlay masks are drawn / their colour + alpha."),
+             "Each detection stage (Tissue, Artifact, Fold, SABG, Edge) is always open "
+             "with one 0-100 'sensitivity' slider — drag left to detect less, right to "
+             "detect more; it drives several of that stage's knobs together. Open "
+             "'details' for the individual raw parameters. The per-ROI seed threshold "
+             "lives in the SABG section. The ROI recomputes after a short pause when "
+             "'auto' is on (orange 'changed' → green 'up to date'); turn 'auto' off to "
+             "edit freely and press Recompute. The Result panel shows %SABG, thresholds, "
+             "tissue%, pixel counts and mm² areas."),
+            ("Detailed parameters guide (advanced)",
+             "Tissue — white_level 0.80-0.95 (brightness above which low-saturation = "
+             "glass), sat_min 0.05-0.15, texture_min 0.001-0.02 (lower keeps more faint "
+             "tissue), texture_win 15-41 px, bg_margin 0.04-0.20.\n"
+             "Artifact — dark_level 0.25-0.45 (max(R,G,B)/255 below = dark), teal_min "
+             "protects real teal from being flagged.\n"
+             "Fold — source density|sabg, score_min 0.02-0.20 (lower finds more ridges), "
+             "min_length_um / max_width_um / band_width_um set the ridge geometry.\n"
+             "SABG — threshold.method triangle|otsu|percentile|fixed, threshold.scale "
+             "0.5-1.3 (higher = stricter seed), hysteresis + hyst_low_scale 0.2-0.9 "
+             "(lower grows seeds further into faint teal), expand_px dilates positives.\n"
+             "Edge — min_width_um, shadow_dark_level / shadow_sat_min reject dark "
+             "achromatic rims, teal_keep protects clearly-teal pixels."),
             ("Layers (ROI overlay)",
              "Toggle which overlay masks are drawn and their colour/alpha. They apply "
              "to the ROI overlay, so the panel is enabled only on the ROI tab."),

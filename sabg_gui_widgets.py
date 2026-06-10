@@ -572,6 +572,112 @@ def apply_field(cfg, section: str, attr: str, kind: str, var: tk.Variable) -> bo
     return True
 
 
+# Map each detection group title -> its SLIDER_LAYERS label (the composite knob set),
+# so a section's one sensitivity slider can drive all of its guided knobs together.
+SECTION_SLIDERS = {
+    "1. Tissue": "tissue",
+    "2. Artifact / dark folds": "artifact",
+    "3. Fold (linear ridges)": "fold",
+    "4. SABG detection": "SABG+",
+    "5. Edge-shadow rejection": "edge-reject",
+}
+_SLIDER_KNOBS_BY_LABEL = dict(SLIDER_LAYERS)        # label -> [(section, attr, v0, v100, klab), ...]
+
+
+def _add_composite_slider(parent, knobs, field_vars: dict) -> None:
+    """One 0-100 sensitivity slider driving EVERY knob in *knobs* together (left =
+    detect less, right = more). Each knob's field var must already be in *field_vars*
+    (build the raw rows first). Editing the primary (first) knob re-derives the slider
+    position; a guard breaks the slider<->entry feedback loop."""
+    guard = {"on": False}
+    sv = tk.DoubleVar()
+    p_sec, p_attr, p_v0, p_v100 = knobs[0][0], knobs[0][1], knobs[0][2], knobs[0][3]
+    primary_var = field_vars.get((p_sec, p_attr))
+    try:
+        if primary_var is not None:
+            sv.set(value_to_slider(p_v0, p_v100, float(primary_var.get())))
+    except (ValueError, tk.TclError):
+        pass
+
+    def from_slider(_v=None) -> None:
+        if guard["on"]:
+            return
+        guard["on"] = True
+        try:                              # ttk.Scale passes the new value; prefer it
+            s = float(_v) if _v is not None else sv.get()
+        except (ValueError, tk.TclError):
+            s = sv.get()
+        for sec, attr, v0, v100, _kl in knobs:
+            var = field_vars.get((sec, attr))
+            if var is not None:
+                var.set(f"{slider_to_value(v0, v100, s):.4g}")   # fires the entry trace
+        guard["on"] = False
+
+    def from_primary(*_a) -> None:
+        if guard["on"] or primary_var is None:
+            return
+        try:
+            cur = float(primary_var.get())
+        except (ValueError, tk.TclError):
+            return
+        guard["on"] = True
+        sv.set(value_to_slider(p_v0, p_v100, cur))
+        guard["on"] = False
+
+    tk.Label(parent, text="detect less", fg="#888", font=("Segoe UI", 7)).grid(
+        row=0, column=0, sticky="e")
+    ttk.Scale(parent, from_=0, to=100, variable=sv, command=from_slider,
+              length=150).grid(row=0, column=1, sticky="ew", padx=3)
+    tk.Label(parent, text="more", fg="#888", font=("Segoe UI", 7)).grid(
+        row=0, column=2, sticky="w")
+    lbl = tk.Label(parent, text="sensitivity", anchor="w", font=("Segoe UI", 8, "bold"))
+    lbl.grid(row=1, column=0, columnspan=3, sticky="w")
+    Tooltip(lbl, "Drives " + ", ".join(k[4] for k in knobs)
+            + " together (left = detect less, right = more).")
+    parent.columnconfigure(1, weight=1)
+    if primary_var is not None:
+        primary_var.trace_add("write", from_primary)
+
+
+def build_detection_sections(parent, cfg, field_vars: dict, on_change: Callable,
+                             recompute: bool, section_extra: dict | None = None) -> list:
+    """Preview detection panel: each ``DETECTION_GROUPS`` stage as an ALWAYS-OPEN
+    section showing a single composite *sensitivity* slider (driving that stage's knobs),
+    with the full raw parameters behind a collapsed **details** expander.
+
+    *section_extra* maps a group title -> ``callable(frame)`` to inject extra controls
+    (e.g. the per-ROI seed threshold into "4. SABG detection"). The raw rows are built
+    first so ``field_vars`` is populated before the composite slider wires to it."""
+    section_extra = section_extra or {}
+    out = []
+    for title, fields, desc in DETECTION_GROUPS:
+        sec = tk.LabelFrame(parent, text=title, padx=4, pady=3)
+        sec.pack(fill="x", expand=True, pady=3)
+        if desc:
+            tk.Label(sec, text=desc, fg="#666", font=("Segoe UI", 7),
+                     wraplength=320, justify="left", anchor="w").pack(fill="x")
+        # details expander -- built first (populates field_vars) but packed last so it
+        # sits below the slider/extra controls.
+        det = CollapsibleFrame(sec, "details", opened=False)
+        grid = tk.Frame(det.body, padx=2, pady=2)
+        grid.pack(fill="x")
+        build_field_rows(grid, cfg, fields, field_vars, on_change, recompute,
+                         sensitivity=False)
+        if title in SECTION_SLIDERS:
+            knobs = _SLIDER_KNOBS_BY_LABEL.get(SECTION_SLIDERS[title])
+            if knobs:
+                srow = tk.Frame(sec, padx=2)
+                srow.pack(fill="x", pady=(2, 0))
+                _add_composite_slider(srow, knobs, field_vars)
+        if title in section_extra:
+            ex = tk.Frame(sec, padx=2)
+            ex.pack(fill="x", pady=(2, 0))
+            section_extra[title](ex)
+        det.pack(fill="x", pady=(2, 0))
+        out.append((sec, det))
+    return out
+
+
 def build_groups(parent, cfg, groups, field_vars: dict, on_change: Callable,
                  recompute: bool, opened=None,
                  sensitivity: bool = False) -> list[CollapsibleFrame]:
