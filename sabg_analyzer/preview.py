@@ -258,7 +258,8 @@ def export_config(cfg: Config, path: str | Path) -> Path:
 def export_roi(rgb: np.ndarray, pixel_size_um: float | None, dest_base: str | Path,
                *, order=None, formats=("jpg",), scalebar_um: str | float = "Auto",
                scalebar_pos: str = "br", scalebar_label: bool = True,
-               wb: bool = True, target_um: float = 200.0) -> list[Path]:
+               wb: bool = True, target_um: float = 200.0,
+               wb_bright_frac: float = 0.2, wb_target: float = 250.0) -> list[Path]:
     """Write publication presets for one ROI / section image. Returns the paths.
 
     Reuses the batch export building blocks (`whitebalance`, `overlay`,
@@ -292,8 +293,9 @@ def export_roi(rgb: np.ndarray, pixel_size_um: float | None, dest_base: str | Pa
             written.append(p)
 
     _write(rgb, "raw")
-    wb_img = (whitebalance.white_balance(rgb, whitebalance.estimate_white_point(rgb))
-              if wb else rgb)
+    wb_img = (whitebalance.white_balance(
+        rgb, whitebalance.estimate_white_point(rgb, wb_bright_frac), target=wb_target)
+        if wb else rgb)
     _write(_bar(wb_img.copy()), "wb_scalebar")
     if order:
         comp = overlay.composite_overlay(wb_img, order)

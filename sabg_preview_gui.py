@@ -363,7 +363,10 @@ class PreviewWindow(tk.Toplevel):
         c = self._wb_cache.get(which)
         if c is not None and c[0] is rgb:
             return c[1]
-        out = whitebalance.white_balance(rgb, whitebalance.estimate_white_point(rgb))
+        wbp = self.cfg.whitebalance
+        out = whitebalance.white_balance(
+            rgb, whitebalance.estimate_white_point(rgb, wbp.bright_frac),
+            target=wbp.target)
         self._wb_cache[which] = (rgb, out)
         return out
 
@@ -1148,7 +1151,9 @@ class PreviewWindow(tk.Toplevel):
             written = preview.export_roi(
                 rgb, px_um, base, order=order, formats=(fmt,),
                 scalebar_um=self.sb_len.get(), scalebar_pos=_SB_POS[self.sb_pos.get()],
-                scalebar_label=self.sb_label.get(), wb=True, target_um=target)
+                scalebar_label=self.sb_label.get(), wb=True, target_um=target,
+                wb_bright_frac=self.cfg.whitebalance.bright_frac,
+                wb_target=self.cfg.whitebalance.target)
             self.status.configure(
                 text=f"exported {len(written)} preset(s) → {base.parent}")
             messagebox.showinfo("Exported", "Wrote:\n" + "\n".join(p.name for p in written),

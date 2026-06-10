@@ -264,7 +264,8 @@ def _section_figures(out_dir: Path, alias: str, doc, scene, ov_rgb, ov_tissue,
     def _wb():
         if "wb" not in cache:
             cache["wb"] = whitebalance.white_balance(
-                base, whitebalance.estimate_white_point(base))
+                base, whitebalance.estimate_white_point(base, cfg.whitebalance.bright_frac),
+                target=cfg.whitebalance.target)
         return cache["wb"]
 
     def _boxes(img):
@@ -559,8 +560,9 @@ def _export_scene(doc, s: SceneInfo, out_dir: Path, p: ExportParams, cfg, conv,
         # base colour renderings to write
         bases: list[tuple[str, np.ndarray]] = []
         if p.wb:
-            wp = whitebalance.estimate_white_point(raw)
-            bases.append(("wb", whitebalance.white_balance(raw, wp)))
+            wp = whitebalance.estimate_white_point(raw, cfg.whitebalance.bright_frac)
+            bases.append(("wb", whitebalance.white_balance(raw, wp,
+                                                           target=cfg.whitebalance.target)))
         if p.raw:
             bases.append(("raw", raw))
 

@@ -405,6 +405,14 @@ SIZING_FIELDS = [
     ("", "thumb_max_edge", "int", "thumb_max_edge", "Safety cap (px) for scan thumbnails."),
     ("", "full_debug", "bool", "full_debug", "Write extra debug artifacts."),
 ]
+WHITEBALANCE_FIELDS = [
+    ("whitebalance", "bright_frac", "float", "bright_frac",
+     "Fraction of the brightest pixels averaged as the white point (display/figures only)."),
+    ("whitebalance", "target", "float", "target",
+     "Channel value the white point is scaled to (near-white)."),
+    ("whitebalance", "homogeneity_tol", "float", "homogeneity_tol",
+     "Reserved: max RGB spread allowed for a manual white-point pick."),
+]
 OUTPUT_FIELDS = [
     ("output", "debug", "bool", "debug", "Write debug/<alias>_compare.jpg (6-panel audit)."),
     ("output", "maps", "bool", "maps", "Write maps/<alias>_* (consumed by export)."),
@@ -434,6 +442,8 @@ OTHER_GROUPS = [
     ("Canvas sizing", SIZING_FIELDS,
      "How big each working canvas is (µm/px, proportional to physical size, with px caps)."),
     ("Output artifacts", OUTPUT_FIELDS, "Which files analyze/export write."),
+    ("White balance", WHITEBALANCE_FIELDS,
+     "Display/figure white balance (quantification always uses raw pixels)."),
     ("Progress", PROGRESS_FIELDS, "What the progress reporter prints."),
     ("GUI", GUI_FIELDS, "GUI-only knobs."),
     ("Alias", ALIAS_FIELDS, "How each section's short alias is built from sections.csv."),

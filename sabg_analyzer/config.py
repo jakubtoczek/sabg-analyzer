@@ -60,6 +60,16 @@ class OverlayParams:
 
 
 @dataclass
+class WhiteBalanceParams:
+    """Display-only white balance for publication figures (quantification always uses
+    raw pixels). `estimate_white_point` averages the brightest `bright_frac` of pixels
+    and scales each channel so that point maps to `target` (near-white)."""
+    bright_frac: float = 0.2     # fraction of brightest pixels taken as the white point
+    target: float = 250.0        # channel value the white point is scaled to (near-white)
+    homogeneity_tol: float = 0.15  # reserved: max RGB spread for a manual white-point pick
+
+
+@dataclass
 class OutputParams:
     """Toggle which image artifacts `analyze` writes. `results.csv` and the
     `config.yaml` snapshot are always written. NB: `export` needs `maps`."""
@@ -130,6 +140,7 @@ class Config:
     detection: DetectionParams = field(default_factory=DetectionParams)
     threshold: ThresholdParams = field(default_factory=ThresholdParams)
     overlay: OverlayParams = field(default_factory=OverlayParams)
+    whitebalance: WhiteBalanceParams = field(default_factory=WhiteBalanceParams)
     output: OutputParams = field(default_factory=OutputParams)
     progress: ProgressParams = field(default_factory=ProgressParams)
     gui: GuiParams = field(default_factory=GuiParams)
@@ -238,6 +249,8 @@ def load_config(path: str | Path | None) -> Config:
             cfg.overlay.excluded_color = tuple(ov["excluded_color"])
         if ov.get("excluded_alpha") is not None:
             cfg.overlay.excluded_alpha = float(ov["excluded_alpha"])
+    if "whitebalance" in raw and raw["whitebalance"]:
+        _update_dataclass(cfg.whitebalance, raw["whitebalance"])
     if "output" in raw and raw["output"]:
         _update_dataclass(cfg.output, raw["output"])
     if "progress" in raw and raw["progress"]:

@@ -206,6 +206,12 @@ overlay:
   excluded_color: [255, 0, 255]  # RGB highlight for the manual exclusion mask (magenta)
   excluded_alpha: 0.55         # exclusion blend strength (0-1)
 
+# ---- White balance (display/figures only; quantification uses raw pixels) --
+whitebalance:
+  bright_frac: 0.2     # fraction of the brightest pixels averaged as the white point
+  target: 250.0        # channel value that white point is scaled to (near-white)
+  homogeneity_tol: 0.15  # reserved: max RGB spread allowed for a manual white-point pick
+
 # ---- Which image outputs `analyze` writes ---------------------------------
 # results.csv and the config.yaml snapshot are always written. Turn off any of
 # these to skip writing them. NOTE: `export` needs the maps, so keep maps: true
