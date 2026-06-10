@@ -182,6 +182,7 @@ class PreviewWindow(tk.Toplevel):
 
         self.btn_draw_roi = tk.Button(row1, text="Draw ROI", command=self.on_draw_roi)
         self.btn_draw_roi.pack(side="left", padx=2, pady=2)
+        self._roi_btn_bg = self.btn_draw_roi.cget("background")   # for the sticky toggle
         # Drawing no longer auto-opens: adjust the rectangle, then "Open ROI".
         self.btn_open_roi = tk.Button(row1, text="Open ROI", command=self.on_open_roi,
                                       state="disabled")
@@ -474,7 +475,7 @@ class PreviewWindow(tk.Toplevel):
         # brush, ROI-draw and left-pan all use the left button -> brushing is
         # exclusive: it turns the rectangle selector off (pan resumes when off).
         if self.brush_mode is not None:
-            self.selector.set_active(False)
+            self._set_draw_active(False)
         else:
             self._hide_brush_cursor()
 
@@ -806,8 +807,24 @@ class PreviewWindow(tk.Toplevel):
             self.status.configure(
                 text=f"{self.entry.alias}: drag to pan; 'Draw ROI' to select a region.")
 
+    def _set_draw_active(self, active: bool) -> None:
+        """Activate/deactivate the ROI rectangle selector and reflect it on the sticky
+        'Draw ROI' button (sunken + tinted while drawing, raised otherwise)."""
+        sel = getattr(self, "selector", None)
+        if sel is not None:
+            sel.set_active(active)
+        btn = getattr(self, "btn_draw_roi", None)
+        if btn is not None:
+            btn.configure(relief="sunken" if active else "raised",
+                          bg="#cfe3ff" if active else self._roi_btn_bg)
+
     def on_draw_roi(self) -> None:
         if self.entry is None:
+            return
+        if self.selector.get_active():         # sticky: a second click returns to pan
+            self._set_draw_active(False)
+            self.status.configure(
+                text=f"{self.entry.alias}: drag to pan; 'Draw ROI' to select a region.")
             return
         if self.roi_rgb is not None:           # start a fresh ROI
             self.clear_roi()
@@ -815,7 +832,7 @@ class PreviewWindow(tk.Toplevel):
         self.brush_mode = None
         self.roi_rect = None
         self.nb.select(0)
-        self.selector.set_active(True)
+        self._set_draw_active(True)
         self.status.configure(text="drag a rectangle (adjust the handles, then 'Open ROI').")
         self._update_roi_buttons()
 
@@ -890,7 +907,7 @@ class PreviewWindow(tk.Toplevel):
         self.layers = None
         self.roi_nav.clear_home()
         self._wb_cache.pop("roi", None)
-        self.selector.set_active(False)        # back to left-drag-to-pan default
+        self._set_draw_active(False)           # back to left-drag-to-pan default
         if hasattr(self, "roi_tab"):
             self.nb.tab(self.roi_tab, state="disabled")    # no ROI -> grey the tab
         self._roi_hint()
@@ -1021,7 +1038,7 @@ class PreviewWindow(tk.Toplevel):
                 elif kind == "roi":
                     self.roi_rgb, self.roi_px_um = item[1], item[2]
                     self._wb_cache.pop("roi", None)     # new ROI invalidates WB cache
-                    self.selector.set_active(False)     # ROI fixed while open
+                    self._set_draw_active(False)        # ROI fixed while open
                     self.nb.tab(self.roi_tab, state="normal")
                     self.nb.select(self.roi_tab)
                     self._update_roi_buttons()
