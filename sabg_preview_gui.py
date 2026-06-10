@@ -118,7 +118,8 @@ class PreviewWindow(tk.Toplevel):
         self._excl_artist = None                           # red overlay AxesImage
         self._painting = False
 
-        self.sb_pos.trace_add("write", lambda *_: self._draw_sb_preview())
+        for _v in (self.sb_pos, self.sb_len, self.sb_label):
+            _v.trace_add("write", lambda *_: self._draw_sb_preview())
         self._build_layout()
         self._draw_sb_preview()
         self._populate_picker()
@@ -308,15 +309,41 @@ class PreviewWindow(tk.Toplevel):
                   command=lambda: self.on_export_image(source)).pack(side="left", padx=(8, 2))
         tk.Button(bar, text="?", width=2, command=self._show_help).pack(side="right", padx=2)
 
+    def _sb_preview_label(self) -> str:
+        """The length text the scale-bar preview shows ('Auto' / '100 µm' / '1 mm')."""
+        sel = self.sb_len.get()
+        if sel in ("", "Auto"):
+            return "Auto"
+        try:
+            v = float(sel)
+        except ValueError:
+            return sel
+        return f"{v / 1000:g} mm" if v >= 1000 else f"{v:g} µm"
+
     def _draw_sb_preview(self) -> None:
-        """Tiny schematic of where the scale bar will land in each corner."""
+        """Mini render of the scale bar as it'll appear on export: a short black bar in
+        the chosen corner with its length label above it (when labels are on)."""
         pos = _SB_POS.get(self.sb_pos.get(), "br")
+        right = pos.endswith("r")
+        bottom = pos.startswith("b")
+        label_on = bool(self.sb_label.get())
+        txt = self._sb_preview_label()
         for cv in getattr(self, "_sb_preview_canvases", []):
             cv.delete("all")
             w = int(cv["width"]); h = int(cv["height"])
-            bx = 3 if "l" in pos else w - 12
-            by = 3 if pos.startswith("t") else h - 6
-            cv.create_rectangle(bx, by, bx + 9, by + 3, fill="black", outline="")
+            m = 5
+            bw = max(10, w // 3); bh = 4
+            x1 = (w - m - bw) if right else m
+            x2 = x1 + bw
+            if bottom:
+                y2 = h - m; y1 = y2 - bh
+            else:
+                y1 = m + (12 if label_on else 0); y2 = y1 + bh
+            cv.create_rectangle(x1, y1, x2, y2, fill="black", outline="")
+            if label_on:
+                cv.create_text(x2 if right else x1, y1 - 2, text=txt,
+                               anchor="se" if right else "sw",
+                               font=("Segoe UI", 7), fill="black")
 
     def _wb(self, rgb: np.ndarray, which: str) -> np.ndarray:
         """White-balanced copy of *rgb* (cached per *which* by image identity)."""
