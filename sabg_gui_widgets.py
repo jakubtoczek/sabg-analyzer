@@ -685,20 +685,26 @@ def thumbnail_picker(parent, entries, on_select: Callable, photo_refs: list,
         tk.Label(parent, text="No thumbnails.\nRun Scan first.",
                  wraplength=160, fg="#a00").pack(pady=10)
         return
+    # Load each PhotoImage once (to size the shared subsample factor) and reuse it.
+    originals: dict = {}
     longest = 1
     for e in have_thumbs:
         try:
             img = tk.PhotoImage(file=str(e.thumb_path))
-            longest = max(longest, img.width(), img.height())
         except Exception:
-            pass
+            continue
+        originals[e.thumb_path] = img
+        longest = max(longest, img.width(), img.height())
     factor = max(1, -(-longest // target_px))          # ceil(longest / target_px)
     for e in entries:
         cell = tk.Frame(parent, padx=2, pady=3)
         cell.pack(fill="x")
         if e.thumb_path.exists():
+            orig = originals.get(e.thumb_path)
             try:
-                img = tk.PhotoImage(file=str(e.thumb_path)).subsample(factor, factor)
+                if orig is None:
+                    raise OSError("thumb unreadable")
+                img = orig.subsample(factor, factor)
                 photo_refs.append(img)
                 tk.Button(cell, image=img, relief="raised",
                           command=lambda en=e: on_select(en)).pack()
