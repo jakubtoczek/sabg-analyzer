@@ -96,6 +96,7 @@ class PreviewWindow(tk.Toplevel):
         self.roi_px_um: float | None = None
         self.roi_rect: tuple[int, int, int, int] | None = None   # full-res (x,y,w,h)
         self.layers: dict | None = None
+        self._disp_artist = None                           # thumbnail base AxesImage
         self._setting_extents = False                      # guard for programmatic clamp
 
         self.manual_auto = tk.BooleanVar(value=True)       # auto threshold on ROI
@@ -367,8 +368,16 @@ class PreviewWindow(tk.Toplevel):
         return out
 
     def _on_wb_toggle(self) -> None:
-        if self.disp_rgb is not None and self.roi_rgb is None:
-            self._show_display(self.disp_rgb)
+        """Apply/undo the display white balance on BOTH the thumbnail and the ROI,
+        without clearing the thumb axes (preserves zoom/pan + the exclusion overlay).
+        Skipped mid-stroke so painting isn't interrupted."""
+        if self._painting:
+            return
+        wb = self.wb_on.get()
+        if self.disp_rgb is not None and self._disp_artist is not None:
+            self._disp_artist.set_data(
+                self._wb(self.disp_rgb, "disp") if wb else self.disp_rgb)
+            self.thumb_canvas.draw_idle()
         if self.roi_rgb is not None and self.layers is not None:
             self._redraw()
 
@@ -755,12 +764,14 @@ class PreviewWindow(tk.Toplevel):
 
     def _show_display(self, rgb: np.ndarray) -> None:
         self.disp_rgb = rgb
+        self._wb_cache.pop("disp", None)         # this image's WB is (re)computed below
         self.thumb_ax.clear()
         self._excl_artist = None                 # cleared with the axes
         self._excl_rgba = None                   # rebuilt by _refresh_excl_overlay below
         self._brush_cursor = None                # patch removed with the axes clear
         self.thumb_ax.set_axis_off()
-        self.thumb_ax.imshow(self._wb(rgb, "disp") if self.wb_on.get() else rgb)
+        self._disp_artist = self.thumb_ax.imshow(
+            self._wb(rgb, "disp") if self.wb_on.get() else rgb)
         # exclusion mask follows the display resolution (load saved on a fresh section)
         h, w = rgb.shape[:2]
         if self.excl_mask is None:
