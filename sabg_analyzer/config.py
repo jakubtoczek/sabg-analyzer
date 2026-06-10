@@ -108,6 +108,18 @@ class GuiParams:
 
 
 @dataclass
+class PathsParams:
+    """Default folders + filename templates (GUI convenience). Blank folders fall back
+    to the GUI's built-ins (../data, ../outputs). ``export_dir`` seeds the preview
+    Export… dialog; ``preview_export_name`` is its default base name (tokens ``{alias}``,
+    ``{kind}`` where kind is ``roi``/``thumb``)."""
+    data_dir: str = ""
+    out_dir: str = ""
+    export_dir: str = ""
+    preview_export_name: str = "{alias}_{kind}"
+
+
+@dataclass
 class AliasParams:
     """How each section's short alias (used in results + filenames) is built
     from the `sections.csv` metadata. `tag` (if filled) always wins."""
@@ -144,6 +156,7 @@ class Config:
     output: OutputParams = field(default_factory=OutputParams)
     progress: ProgressParams = field(default_factory=ProgressParams)
     gui: GuiParams = field(default_factory=GuiParams)
+    paths: PathsParams = field(default_factory=PathsParams)
     alias: AliasParams = field(default_factory=AliasParams)
     export: dict[str, Any] = field(default_factory=dict)  # defaults for `export`
     scenes: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -257,6 +270,8 @@ def load_config(path: str | Path | None) -> Config:
         _update_dataclass(cfg.progress, raw["progress"])
     if "gui" in raw and raw["gui"]:
         _update_dataclass(cfg.gui, raw["gui"])
+    if "paths" in raw and raw["paths"]:
+        _update_dataclass(cfg.paths, raw["paths"])
     if "alias" in raw and raw["alias"]:
         _update_dataclass(cfg.alias, raw["alias"])
     if "export" in raw and raw["export"]:

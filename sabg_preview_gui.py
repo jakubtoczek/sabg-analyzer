@@ -1129,16 +1129,23 @@ class PreviewWindow(tk.Toplevel):
                 messagebox.showinfo("Export", "Pick a section first.", parent=self)
                 return
             rgb, px_um, order = self.disp_rgb, self._loaded_um, None
-            default, target = f"{self.entry.alias}_thumb", 1000.0
+            kind, target = "thumb", 1000.0
         else:
             if self.roi_rgb is None:
                 messagebox.showinfo("Export", "Open a ROI and recompute first.", parent=self)
                 return
             rgb, px_um, order = self.roi_rgb, self.roi_px_um, self._overlay_order()
-            default, target = f"{self.entry.alias}_roi", 200.0
+            kind, target = "roi", 200.0
+        # default base name + folder from cfg.paths (GUI convenience)
+        tmpl = self.cfg.paths.preview_export_name or "{alias}_{kind}"
+        try:
+            default = tmpl.format(alias=self.entry.alias, kind=kind)
+        except Exception:
+            default = f"{self.entry.alias}_{kind}"
         path = filedialog.asksaveasfilename(
             parent=self, title="Export base name (presets are appended)",
             defaultextension=".jpg", initialfile=default,
+            initialdir=(self.cfg.paths.export_dir or None),
             filetypes=[("JPEG", "*.jpg"), ("PNG", "*.png")])
         if not path:
             return

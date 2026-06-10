@@ -317,6 +317,16 @@ export:
   box_label: true         # draw 1,2,... at each box's top-left
   box_label_margin: 6     # small gap to the left of the number
 
+# ---- Default folders + filenames (GUI convenience) ------------------------
+# Blank folders fall back to the built-ins (../data, ../outputs). data_dir/out_dir
+# seed the main window's Data/Output fields; export_dir + preview_export_name seed
+# the preview's Export… dialog ({alias} and {kind}=roi/thumb are substituted).
+paths:
+  data_dir: ""
+  out_dir: ""
+  export_dir: ""
+  preview_export_name: "{alias}_{kind}"
+
 # ---- Per-scene manual overrides -------------------------------------------
 # Keyed by "<file_stem>:<scene_index>". Anything here wins over auto values.
 # `analyze` writes the auto thresholds back here so you can tweak and re-run.

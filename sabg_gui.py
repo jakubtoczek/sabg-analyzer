@@ -52,6 +52,22 @@ DEFAULT_INFO_OPENS = ["sections", "labels"]
 _INFO_TARGETS = {"sections": "sections.csv", "labels": "labels", "thumbs": "thumbs"}
 
 
+def _seed_paths() -> tuple[str, str]:
+    """Initial (data, out) folders from a `paths` block in <DEFAULT_OUT>/config.yaml or
+    the example config, else the built-in defaults. Lets a user pin their folders once."""
+    import yaml
+    for src in (DEFAULT_OUT / "config.yaml", EXAMPLE_CFG):
+        try:
+            if src.exists():
+                pa = (yaml.safe_load(src.read_text(encoding="utf-8")) or {}).get("paths") or {}
+                data, out = pa.get("data_dir") or "", pa.get("out_dir") or ""
+                if data or out:
+                    return data or str(DEFAULT_DATA), out or str(DEFAULT_OUT)
+        except Exception:
+            pass
+    return str(DEFAULT_DATA), str(DEFAULT_OUT)
+
+
 class App:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
@@ -69,8 +85,9 @@ class App:
         root.geometry("880x580")
         root.minsize(740, 470)
 
-        self.data_var = tk.StringVar(value=str(DEFAULT_DATA))
-        self.out_var = tk.StringVar(value=str(DEFAULT_OUT))
+        data0, out0 = _seed_paths()         # config.paths overrides the built-in defaults
+        self.data_var = tk.StringVar(value=data0)
+        self.out_var = tk.StringVar(value=out0)
 
         self._build_paths()
         self._build_actions()

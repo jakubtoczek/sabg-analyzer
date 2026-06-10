@@ -432,6 +432,14 @@ GUI_FIELDS = [
     ("gui", "preview_roi_cap_um", "float", "preview_roi_cap_um", "Preview ROI draw cap (µm)."),
     ("gui", "info_opens", "list", "info_opens", "What the Info button opens (comma separated: sections, labels, thumbs)."),
 ]
+PATHS_FIELDS = [
+    ("paths", "data_dir", "str", "data_dir", "Default data folder (blank = ../data)."),
+    ("paths", "out_dir", "str", "out_dir", "Default output folder (blank = ../outputs)."),
+    ("paths", "export_dir", "str", "export_dir",
+     "Default folder for the preview Export… dialog (blank = last/ask)."),
+    ("paths", "preview_export_name", "str", "preview_export_name",
+     "Default base name for preview exports (tokens: {alias}, {kind} = roi/thumb)."),
+]
 ALIAS_FIELDS = [
     ("alias", "fields", "list", "fields", "Metadata columns joined into the alias (comma separated)."),
     ("alias", "optional", "list", "optional", "Extra columns appended only to break ties (comma separated)."),
@@ -446,6 +454,8 @@ OTHER_GROUPS = [
      "Display/figure white balance (quantification always uses raw pixels)."),
     ("Progress", PROGRESS_FIELDS, "What the progress reporter prints."),
     ("GUI", GUI_FIELDS, "GUI-only knobs."),
+    ("Paths & filenames", PATHS_FIELDS,
+     "Default data/output/export folders + preview export name (GUI convenience)."),
     ("Alias", ALIAS_FIELDS, "How each section's short alias is built from sections.csv."),
 ]
 
