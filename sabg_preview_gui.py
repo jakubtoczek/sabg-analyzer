@@ -11,9 +11,11 @@ Opened from the main GUI's *Preview* button. Flow:
   5. *Save* exports the current ROI overlay as a PNG with a scale bar burned in;
      *Export → config.yaml* writes the chosen settings for the batch run.
 
-Canvas navigation is mouse-only: wheel zooms to the cursor, middle/right drag pans,
-*Reset view* restores the full extent. Heavy CZI reads and the per-change recompute
-run on a worker thread; results come back through a queue drained on the Tk main loop.
+Canvas navigation is mouse-only: wheel zooms to the cursor; left-drag pans too
+(except while drawing a ROI or painting the exclusion brush), middle/right drag
+always pans, *Reset view* restores the full extent. Heavy CZI reads and the
+per-change recompute run on a worker thread; results come back through a queue
+drained on the Tk main loop.
 """
 
 from __future__ import annotations
@@ -90,7 +92,6 @@ class PreviewWindow(tk.Toplevel):
         self.roi_px_um: float | None = None
         self.roi_rect: tuple[int, int, int, int] | None = None   # full-res (x,y,w,h)
         self.layers: dict | None = None
-        self._sel_extents = None                           # last rectangle (thumb px)
         self._setting_extents = False                      # guard for programmatic clamp
 
         self.manual_auto = tk.BooleanVar(value=True)       # auto threshold on ROI
@@ -158,8 +159,15 @@ class PreviewWindow(tk.Toplevel):
         self.nb.add(tab, text="Thumbnail")
         bar = tk.Frame(tab)
         bar.pack(fill="x")
-        tk.Button(bar, text="Draw ROI", command=self.on_draw_roi).pack(side="left", padx=2, pady=2)
-        tk.Button(bar, text="Clear ROI", command=self.clear_roi).pack(side="left", padx=2)
+        self.btn_draw_roi = tk.Button(bar, text="Draw ROI", command=self.on_draw_roi)
+        self.btn_draw_roi.pack(side="left", padx=2, pady=2)
+        # Drawing no longer auto-opens: adjust the rectangle, then "Open ROI".
+        self.btn_open_roi = tk.Button(bar, text="Open ROI", command=self.on_open_roi,
+                                      state="disabled")
+        self.btn_open_roi.pack(side="left", padx=2)
+        self.btn_clear_roi = tk.Button(bar, text="Clear ROI", command=self.clear_roi,
+                                       state="disabled")
+        self.btn_clear_roi.pack(side="left", padx=2)
         tk.Label(bar, text="resolution").pack(side="left", padx=(10, 0))
         labels = self._res_labels()
         ttk.OptionMenu(bar, self.view_res, labels[0], *labels,
@@ -185,12 +193,18 @@ class PreviewWindow(tk.Toplevel):
         self.thumb_ax.set_axis_off()
         self.thumb_canvas = FigureCanvasTkAgg(self.thumb_fig, master=tab)
         self.thumb_canvas.get_tk_widget().pack(fill="both", expand=True)
-        self.thumb_nav = CanvasNav(self.thumb_canvas, self.thumb_ax)
-        # useblit + props => the rectangle renders live while dragging.
+        # Left-drag pans the thumbnail UNLESS a ROI is being drawn or the brush is on.
+        self.thumb_nav = CanvasNav(self.thumb_canvas, self.thumb_ax,
+                                   can_left_pan=self._thumb_can_pan)
+        # useblit + props => the rectangle renders live while dragging; interactive
+        # handles (+ drag_from_anywhere) let it be resized/moved before opening.
         self.selector = RectangleSelector(
             self.thumb_ax, self._on_rect, useblit=True, button=[1],
             minspanx=5, minspany=5, spancoords="pixels", interactive=True,
-            props=dict(facecolor="orange", edgecolor="black", alpha=0.25, fill=True))
+            drag_from_anywhere=True,
+            props=dict(facecolor="orange", edgecolor="black", alpha=0.25, fill=True),
+            handle_props=dict(markeredgecolor="black", markerfacecolor="white",
+                              markersize=7))
         self.selector.set_active(False)
         # brush painting uses left-drag (only when a brush mode is active)
         self.thumb_canvas.mpl_connect("button_press_event", self._on_brush_press)
@@ -218,6 +232,11 @@ class PreviewWindow(tk.Toplevel):
     # -- shared toolbar / scale-bar preview / white balance ----------------
     def _nav(self, source: str):
         return self.thumb_nav if source == "thumb" else self.roi_nav
+
+    def _thumb_can_pan(self) -> bool:
+        """Left-drag pans the thumbnail unless a ROI is being drawn / brush is on."""
+        sel = getattr(self, "selector", None)
+        return self.brush_mode is None and not (sel is not None and sel.get_active())
 
     def _add_shared_tools(self, bar: tk.Frame, source: str) -> None:
         """Controls present on BOTH tabs, in the same order: Reset view, white
@@ -351,8 +370,10 @@ class PreviewWindow(tk.Toplevel):
     def _on_brush_mode(self) -> None:
         mode = self.brush_var.get()
         self.brush_mode = None if mode == "off" else mode
-        # the exclusion brush and the ROI rectangle both use left-drag -> exclusive
-        self.selector.set_active(self.brush_mode is None and self.roi_rgb is None)
+        # brush, ROI-draw and left-pan all use the left button -> brushing is
+        # exclusive: it turns the rectangle selector off (pan resumes when off).
+        if self.brush_mode is not None:
+            self.selector.set_active(False)
 
     def _on_brush_press(self, e) -> None:
         if self.brush_mode is None or e.inaxes is not self.thumb_ax or e.xdata is None:
@@ -591,20 +612,25 @@ class PreviewWindow(tk.Toplevel):
             self.res_label.configure(text="loaded: —")
         self.thumb_canvas.draw_idle()
         self.thumb_nav.set_home()
-        self.selector.set_active(self.roi_rgb is None and self.brush_mode is None)
+        # Selector stays inactive here (left-drag pans by default); activation is
+        # owned by Draw/Open/Clear ROI + the brush, not by reloading the display.
         self._refresh_excl_overlay()
         if self.roi_rgb is None:
             self.status.configure(
-                text=f"{self.entry.alias}: 'Draw ROI', then drag a rectangle.")
+                text=f"{self.entry.alias}: drag to pan; 'Draw ROI' to select a region.")
 
     def on_draw_roi(self) -> None:
         if self.entry is None:
             return
         if self.roi_rgb is not None:           # start a fresh ROI
             self.clear_roi()
+        self.brush_var.set("off")              # drawing is exclusive with the brush
+        self.brush_mode = None
+        self.roi_rect = None
         self.nb.select(0)
         self.selector.set_active(True)
-        self.status.configure(text="drag a rectangle to set the ROI.")
+        self.status.configure(text="drag a rectangle (adjust the handles, then 'Open ROI').")
+        self._update_roi_buttons()
 
     def _on_rect(self, eclick, erelease) -> None:
         if self._setting_extents or self.entry is None or self.disp_rgb is None:
@@ -624,7 +650,6 @@ class PreviewWindow(tk.Toplevel):
         ty0 = (y - sc.y) * h / max(sc.h, 1)
         tw = ww * w / max(sc.w, 1)
         th = hh * h / max(sc.h, 1)
-        self._sel_extents = (tx0, ty0, tw, th)
         self._setting_extents = True
         try:
             self.selector.extents = (tx0, tx0 + tw, ty0, ty0 + th)
@@ -633,10 +658,30 @@ class PreviewWindow(tk.Toplevel):
         um = ww * sc.pixel_size_um if sc.pixel_size_um else 0
         capped = " (at cap)" if self.cfg.gui.preview_roi_cap_um and um >= \
             self.cfg.gui.preview_roi_cap_um - 1 else ""
-        # Drawing a ROI opens it directly (no separate "Open ROI" step).
+        # Show the size and wait for an explicit "Open ROI" (no auto-read / tab jump),
+        # so the rectangle can still be adjusted first.
         self.status.configure(
-            text=f"ROI {ww}x{hh}px (~{um:.0f}µm){capped} — reading at full resolution…")
+            text=f"ROI {ww}x{hh}px (~{um:.0f}µm){capped} — adjust, then 'Open ROI'.")
+        self._update_roi_buttons()
+
+    def on_open_roi(self) -> None:
+        """Read the pending rectangle at full resolution into the ROI tab."""
+        if self.entry is None or self.roi_rect is None or self.roi_rgb is not None:
+            return
+        self.status.configure(
+            text=f"{self.entry.alias}: reading ROI at full resolution…")
         self._submit(self._read_roi, self.entry.scene, self.roi_rect, tag="roi")
+
+    def _update_roi_buttons(self) -> None:
+        """Gate Clear/Open ROI by state (no rect drawn -> both disabled)."""
+        if not hasattr(self, "btn_clear_roi"):
+            return
+        has_pending = self.roi_rect is not None
+        has_open = self.roi_rgb is not None
+        self.btn_clear_roi.configure(
+            state="normal" if (has_pending or has_open) else "disabled")
+        self.btn_open_roi.configure(
+            state="normal" if (has_pending and not has_open) else "disabled")
 
     def _read_roi(self, scene, rect):
         import pylibCZIrw.czi as pyczi
@@ -655,12 +700,13 @@ class PreviewWindow(tk.Toplevel):
         self.roi_px_um = None
         self.roi_rect = None
         self.layers = None
-        self._sel_extents = None
         self.roi_nav.clear_home()
         self._wb_cache.pop("roi", None)
+        self.selector.set_active(False)        # back to left-drag-to-pan default
         if hasattr(self, "roi_tab"):
             self.nb.tab(self.roi_tab, state="disabled")    # no ROI -> grey the tab
         self._roi_hint()
+        self._update_roi_buttons()
         if refresh and self.entry is not None and self.disp_rgb is not None:
             self._show_display(self.disp_rgb)   # clears axes -> removes the rectangle
             self.nb.select(0)
@@ -823,6 +869,7 @@ class PreviewWindow(tk.Toplevel):
                     self.selector.set_active(False)     # ROI fixed while open
                     self.nb.tab(self.roi_tab, state="normal")
                     self.nb.select(self.roi_tab)
+                    self._update_roi_buttons()
                     self.request_recompute()
                 elif kind == "layers":
                     self.layers = item[1]
@@ -974,15 +1021,18 @@ class PreviewWindow(tk.Toplevel):
              "Click a thumbnail on the left. Thumbnails are sized proportional to "
              "each section's physical size."),
             ("Canvas navigation",
-             "Mouse wheel zooms to the cursor; middle- or right-drag pans; "
-             "'Reset view' restores the full extent."),
+             "Mouse wheel zooms to the cursor; left-drag pans (except while "
+             "drawing a ROI or painting the exclusion brush); middle/right-drag "
+             "always pans; 'Reset view' restores the full extent."),
             ("Resolution (Thumbnail tab)",
              "Choose the µm/px the section is read at for ROI drawing. 'loaded: …' "
              "shows the actual µm/px achieved for the image on screen."),
             ("Drawing a ROI",
-             "'Draw ROI', then drag a rectangle (it shows live). Releasing opens the "
-             "crop at full resolution in the ROI tab (capped at gui.preview_roi_cap_um). "
-             "The ROI tab is greyed until a ROI is open. 'Clear ROI' starts over."),
+             "'Draw ROI', then drag a rectangle (it shows live, and its size in px/µm "
+             "appears in the status bar). Resize/move it with the handles, then "
+             "'Open ROI' reads the crop at full resolution in the ROI tab (capped at "
+             "gui.preview_roi_cap_um). The ROI tab is greyed until a ROI is open; "
+             "'Clear ROI' (enabled once a rectangle exists) starts over."),
             ("Exclusion brush (Thumbnail tab)",
              "Paint regions to drop from analysis (e.g. muscle next to tumour). "
              "'draw' adds, 'erase' removes, 'size' sets the brush; 'Clear excl' wipes it. "

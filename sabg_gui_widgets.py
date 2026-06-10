@@ -155,13 +155,19 @@ class CollapsibleFrame(tk.Frame):
 # mouse-only matplotlib canvas navigation (shared by Preview + Info viewers)
 # ---------------------------------------------------------------------------
 class CanvasNav:
-    """Wheel-zoom-to-cursor + middle/right-drag pan on one matplotlib axes."""
+    """Wheel-zoom-to-cursor + middle/right-drag pan on one matplotlib axes.
 
-    def __init__(self, canvas, ax) -> None:
+    Left-drag also pans when *can_left_pan* (a no-arg predicate) returns True --
+    used so the Preview thumbnail pans on left-drag *unless* a ROI rectangle or
+    the exclusion brush is active. Defaults to always-on (Info viewers, ROI tab).
+    """
+
+    def __init__(self, canvas, ax, can_left_pan=None) -> None:
         self.canvas = canvas
         self.ax = ax
         self._home = None
         self._panning = False
+        self._can_left_pan = can_left_pan
         canvas.mpl_connect("scroll_event", self._zoom)
         canvas.mpl_connect("button_press_event", self._press)
         canvas.mpl_connect("motion_notify_event", self._drag)
@@ -191,7 +197,11 @@ class CanvasNav:
         self.canvas.draw_idle()
 
     def _press(self, e) -> None:
-        if e.button in (2, 3) and e.inaxes is self.ax:
+        if e.inaxes is not self.ax:
+            return
+        left_pan = e.button == 1 and (self._can_left_pan is None
+                                      or self._can_left_pan())
+        if e.button in (2, 3) or left_pan:
             self.ax.start_pan(e.x, e.y, 1)
             self._panning = True
 
