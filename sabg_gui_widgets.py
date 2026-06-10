@@ -454,25 +454,29 @@ OTHER_GROUPS = [
 # section "" and are edited through a `DictObj` proxy (below) over the effective
 # export dict; mirrors `export.ExportParams`.
 # ---------------------------------------------------------------------------
+# Files per FOV = (enabled colour bases: raw and/or wb) × (enabled variants: plain
+# and/or qc_overlay) × (formats). E.g. wb+plain and raw+qc = 2 files per FOV.
 EXPORT_FOV_FIELDS = [
-    ("", "n_fov", "int", "n_fov", "Number of representative FOV crops per section."),
-    ("", "fov_um", "float", "fov_um", "FOV side length (µm)."),
+    ("", "n_fov", "int", "n_fov", "How many representative FOV crops to write per section."),
+    ("", "fov_um", "float", "fov_um", "FOV crop side length in microns (square)."),
     ("", "min_tissue_frac", "float", "min_tissue_frac",
-     "Min tissue fraction (0-1) a FOV must contain; FOVs are picked close to the section average."),
-    ("", "scalebar_um", "float", "scalebar_um", "FOV scale-bar length (µm)."),
-    ("", "scalebar_label", "bool", "scalebar_label", "Draw the FOV scale-bar label text."),
-    ("", "wb", "bool", "wb", "Write white-balanced FOV figures."),
-    ("", "raw", "bool", "raw", "Write original-colour FOV figures."),
-    ("", "plain", "bool", "plain", "Write the clean FOV image without overlay."),
-    ("", "qc_overlay", "bool", "qc_overlay", "Write a FOV copy with the SABG+/artifact overlay."),
-    ("", "formats", "list", "formats", "FOV output formats (comma separated, e.g. jpg, png)."),
+     "A FOV must be at least this fraction tissue (0-1) to qualify."),
+    ("", "scalebar_um", "float", "scalebar_um", "Scale-bar length burned into each FOV (µm)."),
+    ("", "scalebar_label", "bool", "scalebar_label", "Draw the '… µm' text above the FOV scale bar."),
+    ("", "wb", "bool", "wb", "Colour base: write a WHITE-BALANCED version of each FOV."),
+    ("", "raw", "bool", "raw", "Colour base: write an ORIGINAL-COLOUR version of each FOV."),
+    ("", "plain", "bool", "plain", "Variant: write the clean FOV image (no overlay) for each enabled base."),
+    ("", "qc_overlay", "bool", "qc_overlay",
+     "Variant: write a FOV copy with the SABG+/artifact overlay burned in."),
+    ("", "formats", "list", "formats", "Output formats per file (comma separated: jpg, png, tif)."),
 ]
 EXPORT_SECTION_FIELDS = [
     ("", "section_figures", "bool", "section_figures", "Render whole-section overlay figures."),
     ("", "section_um_per_px", "float", "section_um_per_px", "Section-figure resolution (µm/px)."),
     ("", "sec_variants", "list", "sec_variants",
-     "Section figure variants (comma separated: raw, wb_scalebar, wb_overlay_fov_scalebar)."),
-    ("", "sec_formats", "list", "sec_formats", "Section figure formats (comma separated)."),
+     "One file per entry; each is underscore-joined tokens: base raw|wb, overlay "
+     "overlay|overlaysabg, fov (numbered FOV boxes), scalebar. e.g. wb_overlay_fov_scalebar."),
+    ("", "sec_formats", "list", "sec_formats", "Section figure formats (comma separated: jpg, png, tif)."),
     ("", "sec_scalebar_um", "float", "sec_scalebar_um", "Section scale-bar length (µm)."),
     ("", "sec_scalebar_adaptive", "bool", "sec_scalebar_adaptive",
      "Snap the section scale bar to a nice value near sec_scalebar_um."),
@@ -480,9 +484,12 @@ EXPORT_SECTION_FIELDS = [
 ]
 EXPORT_GROUPS = [
     ("FOV crops", EXPORT_FOV_FIELDS,
-     "Representative full-resolution FOV crops (≥ min_tissue_frac tissue, near the section mean)."),
+     "Per-FOV full-resolution crops. Files written per FOV = the colour bases you enable "
+     "(raw and/or white-balanced) × the variants (plain and/or qc_overlay) × formats. "
+     "FOVs are picked ≥ min_tissue_frac tissue, near the section mean %SABG."),
     ("Section figures", EXPORT_SECTION_FIELDS,
-     "Whole-section overlay figures rendered from the maps."),
+     "Whole-section overlay figures rendered from the maps — one file per sec_variants "
+     "entry (token grammar in the sec_variants tooltip)."),
 ]
 
 

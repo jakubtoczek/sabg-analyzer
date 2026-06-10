@@ -393,9 +393,13 @@ class ConfigWindow(tk.Toplevel):
              "(incl. maps_um_per_px, keep_maps), progress, GUI knobs and how the alias "
              "is built from sections.csv."),
             ("Export",
-             "How `export` builds figures: number/size of FOV crops and how they're "
-             "picked (≥ min_tissue_frac tissue, near the section mean), formats, scale "
-             "bars, and the whole-section figure variants/resolution."),
+             "How `export` builds figures. FOV crops: each qualifying FOV (≥ "
+             "min_tissue_frac tissue, near the section mean %SABG) is written in the "
+             "colour bases you enable (raw and/or white-balanced) × the variants (plain "
+             "and/or qc_overlay) × formats — so wb+plain and raw+qc gives 2 files per "
+             "FOV. Section figures: one file per sec_variants entry, each a set of "
+             "underscore-joined tokens (base raw|wb, overlay overlay|overlaysabg, fov "
+             "boxes, scalebar), e.g. wb_overlay_fov_scalebar."),
             ("Save / Reload",
              "Save writes the full config.yaml (every block, directly re-loadable). "
              "Reload re-reads config.yaml, discarding unsaved edits. Per-scene overrides "
