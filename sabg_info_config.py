@@ -94,10 +94,11 @@ class InfoWindow(tk.Toplevel):
         self._build_layout()
 
     def _build_layout(self) -> None:
-        # left: picker | centre: label/thumb viewer | right: big table editor
-        left = tk.Frame(self, width=168)
-        left.pack(side="left", fill="y")
-        left.pack_propagate(False)
+        # left: picker | centre: viewer | right: big table editor -- resizable via sashes.
+        paned = tk.PanedWindow(self, orient="horizontal", sashrelief="raised", sashwidth=6)
+        paned.pack(fill="both", expand=True)
+
+        left = tk.Frame(paned)
         tk.Label(left, text="Sections", font=("Segoe UI", 9, "bold")).pack(pady=(6, 2))
         pick = gw.ScrollFrame(left)
         pick.pack(fill="both", expand=True)
@@ -109,9 +110,10 @@ class InfoWindow(tk.Toplevel):
             tk.Label(pick.interior, text=f"(picker error: {exc})",
                      wraplength=160, fg="red").pack()
 
-        right = tk.Frame(self, width=600)
-        right.pack(side="right", fill="y")
-        right.pack_propagate(False)
+        center = tk.Frame(paned)
+        self._build_viewer(center)
+
+        right = tk.Frame(paned)
         btns = tk.Frame(right, padx=6, pady=6)
         btns.pack(fill="x")
         tk.Button(btns, text="💾  Save sections.csv", font=("Segoe UI", 9, "bold"),
@@ -126,9 +128,10 @@ class InfoWindow(tk.Toplevel):
         self.table.pack(fill="both", expand=True)
         self._build_table(self.table.interior)
 
-        center = tk.Frame(self)
-        center.pack(side="left", fill="both", expand=True)
-        self._build_viewer(center)
+        paned.add(left, minsize=120, width=168, stretch="never")
+        paned.add(center, minsize=300, stretch="always")
+        paned.add(right, minsize=320, width=600, stretch="never")
+
         if self.entries:
             self._show_section(0)
 

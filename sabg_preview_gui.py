@@ -128,26 +128,29 @@ class PreviewWindow(tk.Toplevel):
 
     # -- layout ------------------------------------------------------------
     def _build_layout(self) -> None:
-        # left: picker (scroll) | center: notebook of canvases | right: tuning (scroll)
-        left = tk.Frame(self, width=190)
-        left.pack(side="left", fill="y")
-        left.pack_propagate(False)
+        # left: picker | center: notebook+status | right: tuning -- resizable via sashes.
+        paned = tk.PanedWindow(self, orient="horizontal", sashrelief="raised", sashwidth=6)
+        paned.pack(fill="both", expand=True)
+
+        left = tk.Frame(paned)
         tk.Label(left, text="Sections", font=("Segoe UI", 9, "bold")).pack(pady=(6, 2))
         self.pick = gw.ScrollFrame(left)
         self.pick.pack(fill="both", expand=True)
 
-        right = tk.Frame(self, width=360)
-        right.pack(side="right", fill="y")
-        right.pack_propagate(False)
-        self._build_tuning_panel(right)
-
-        center = tk.Frame(self)
-        center.pack(side="left", fill="both", expand=True)
+        center = tk.Frame(paned)
         self.status = tk.Label(center, text="Pick a section, then Draw ROI.",
                                anchor="w", relief="sunken")
         self.status.pack(fill="x", side="bottom")
         self.nb = ttk.Notebook(center)
         self.nb.pack(fill="both", expand=True)
+
+        right = tk.Frame(paned)
+        self._build_tuning_panel(right)
+
+        paned.add(left, minsize=120, width=190, stretch="never")
+        paned.add(center, minsize=320, stretch="always")
+        paned.add(right, minsize=280, width=360, stretch="never")
+
         self._build_thumb_tab()
         self._build_roi_tab()
         # Layers apply to the ROI overlay, so enable them only on the ROI tab.
