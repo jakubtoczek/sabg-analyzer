@@ -117,6 +117,7 @@ class PreviewWindow(tk.Toplevel):
         self.brush_size = tk.IntVar(value=18)
         self.excl_mask: np.ndarray | None = None
         self._excl_artist = None                           # exclusion overlay AxesImage
+        self._excl_rgba: np.ndarray | None = None          # persistent overlay buffer
         self._brush_cursor = None                          # hover brush-outline patch
         self._painting = False
 
@@ -512,24 +513,44 @@ class PreviewWindow(tk.Toplevel):
             if b is not None:
                 b.configure(state="normal" if has else "disabled")
 
+    def _excl_color(self) -> tuple[float, float, float, float]:
+        """The exclusion overlay RGBA (0-1) from cfg.overlay.excluded_color/alpha."""
+        col = self.cfg.overlay.excluded_color
+        return (col[0] / 255.0, col[1] / 255.0, col[2] / 255.0,
+                float(self.cfg.overlay.excluded_alpha))
+
     def _paint_at(self, x: float, y: float) -> None:
         if self.excl_mask is None:
             return
         r = max(1, int(self.brush_size.get()))
         val = 255 if self.brush_mode == "draw" else 0
-        cv2.circle(self.excl_mask, (int(round(x)), int(round(y))), r, val, -1)
-        self._refresh_excl_overlay()
+        cx, cy = int(round(x)), int(round(y))
+        cv2.circle(self.excl_mask, (cx, cy), r, val, -1)
+        # Per-stroke: update ONLY the stamp's bounding box in the persistent RGBA buffer
+        # (was rebuilding a full H×W×4 float every motion → slow on large thumbs).
+        if self._excl_rgba is None or self._excl_artist is None:
+            self._refresh_excl_overlay()
+            return
+        h, w = self.excl_mask.shape
+        x0, x1 = max(0, cx - r - 1), min(w, cx + r + 2)
+        y0, y1 = max(0, cy - r - 1), min(h, cy + r + 2)
+        if x1 <= x0 or y1 <= y0:
+            return
+        region = self._excl_rgba[y0:y1, x0:x1]
+        region[...] = 0.0
+        region[self.excl_mask[y0:y1, x0:x1] > 0] = self._excl_color()
+        self._excl_artist.set_data(self._excl_rgba)
+        self.thumb_canvas.draw_idle()
 
     def _refresh_excl_overlay(self) -> None:
-        """Repaint the translucent exclusion overlay on the thumbnail, using the same
-        magenta as the 'excluded' overlay layer (cfg.overlay.excluded_color/alpha) so
-        the brush matches the rendered layer."""
+        """Full rebuild of the exclusion overlay (after load/clear/section switch),
+        using the same magenta as the 'excluded' layer (cfg.overlay.excluded_color/
+        alpha). Per-stroke painting updates only the changed region (see _paint_at)."""
         if self.excl_mask is None:
             return
-        col = self.cfg.overlay.excluded_color
-        a = float(self.cfg.overlay.excluded_alpha)
         rgba = np.zeros((*self.excl_mask.shape, 4), np.float32)
-        rgba[self.excl_mask > 0] = (col[0] / 255.0, col[1] / 255.0, col[2] / 255.0, a)
+        rgba[self.excl_mask > 0] = self._excl_color()
+        self._excl_rgba = rgba
         if self._excl_artist is None:
             self._excl_artist = self.thumb_ax.imshow(rgba, interpolation="nearest")
         else:
@@ -720,6 +741,7 @@ class PreviewWindow(tk.Toplevel):
         self.disp_rgb = rgb
         self.thumb_ax.clear()
         self._excl_artist = None                 # cleared with the axes
+        self._excl_rgba = None                   # rebuilt by _refresh_excl_overlay below
         self._brush_cursor = None                # patch removed with the axes clear
         self.thumb_ax.set_axis_off()
         self.thumb_ax.imshow(self._wb(rgb, "disp") if self.wb_on.get() else rgb)
