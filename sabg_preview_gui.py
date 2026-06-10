@@ -32,6 +32,7 @@ import cv2
 import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
+from matplotlib.patches import Circle
 from matplotlib.widgets import RectangleSelector
 
 import sabg_gui_widgets as gw
@@ -115,7 +116,8 @@ class PreviewWindow(tk.Toplevel):
         self.brush_mode: str | None = None
         self.brush_size = tk.IntVar(value=18)
         self.excl_mask: np.ndarray | None = None
-        self._excl_artist = None                           # red overlay AxesImage
+        self._excl_artist = None                           # exclusion overlay AxesImage
+        self._brush_cursor = None                          # hover brush-outline patch
         self._painting = False
 
         for _v in (self.sb_pos, self.sb_len, self.sb_label):
@@ -220,10 +222,13 @@ class PreviewWindow(tk.Toplevel):
             handle_props=dict(markeredgecolor="black", markerfacecolor="white",
                               markersize=7))
         self.selector.set_active(False)
-        # brush painting uses left-drag (only when a brush mode is active)
+        # brush painting uses left-drag (only when a brush mode is active); a hover
+        # outline shows the brush footprint and is hidden when the pointer leaves.
         self.thumb_canvas.mpl_connect("button_press_event", self._on_brush_press)
         self.thumb_canvas.mpl_connect("motion_notify_event", self._on_brush_drag)
         self.thumb_canvas.mpl_connect("button_release_event", self._on_brush_release)
+        self.thumb_canvas.mpl_connect("axes_leave_event", self._on_brush_leave)
+        self.thumb_canvas.mpl_connect("figure_leave_event", self._on_brush_leave)
 
     def _build_roi_tab(self) -> None:
         tab = tk.Frame(self.nb)
@@ -450,6 +455,8 @@ class PreviewWindow(tk.Toplevel):
         # exclusive: it turns the rectangle selector off (pan resumes when off).
         if self.brush_mode is not None:
             self.selector.set_active(False)
+        else:
+            self._hide_brush_cursor()
 
     def _on_brush_press(self, e) -> None:
         if self.brush_mode is None or e.inaxes is not self.thumb_ax or e.xdata is None:
@@ -458,11 +465,52 @@ class PreviewWindow(tk.Toplevel):
         self._paint_at(e.xdata, e.ydata)
 
     def _on_brush_drag(self, e) -> None:
-        if self._painting and e.inaxes is self.thumb_ax and e.xdata is not None:
-            self._paint_at(e.xdata, e.ydata)
+        if self.brush_mode is None:
+            return
+        if e.inaxes is self.thumb_ax and e.xdata is not None:
+            self._update_brush_cursor(e.xdata, e.ydata)
+            if self._painting:
+                self._paint_at(e.xdata, e.ydata)
+        else:
+            self._hide_brush_cursor()
 
     def _on_brush_release(self, _e) -> None:
-        self._painting = False
+        if self._painting:
+            self._painting = False
+            self._update_excl_buttons()
+
+    def _on_brush_leave(self, _e) -> None:
+        self._hide_brush_cursor()
+
+    def _update_brush_cursor(self, x: float, y: float) -> None:
+        """Show a dashed outline circle at the pointer, sized to the brush (so the user
+        sees what will be painted/erased). Magenta for draw, black for erase."""
+        r = max(1, int(self.brush_size.get()))
+        edge = "black" if self.brush_mode == "erase" else "magenta"
+        if self._brush_cursor is None:
+            self._brush_cursor = Circle((x, y), r, fill=False, edgecolor=edge,
+                                        linewidth=1.2, linestyle="--", zorder=10)
+            self.thumb_ax.add_patch(self._brush_cursor)
+        else:
+            self._brush_cursor.center = (x, y)
+            self._brush_cursor.set_radius(r)
+            self._brush_cursor.set_edgecolor(edge)
+            self._brush_cursor.set_visible(True)
+        self.thumb_canvas.draw_idle()
+
+    def _hide_brush_cursor(self) -> None:
+        if self._brush_cursor is not None and self._brush_cursor.get_visible():
+            self._brush_cursor.set_visible(False)
+            self.thumb_canvas.draw_idle()
+
+    def _update_excl_buttons(self) -> None:
+        """Enable Clear/Save exclusion only when something is painted (mirrors
+        `_update_roi_buttons`)."""
+        has = self.excl_mask is not None and bool((self.excl_mask > 0).any())
+        for b in (getattr(self, "btn_clear_excl", None),
+                  getattr(self, "btn_save_excl", None)):
+            if b is not None:
+                b.configure(state="normal" if has else "disabled")
 
     def _paint_at(self, x: float, y: float) -> None:
         if self.excl_mask is None:
@@ -473,11 +521,15 @@ class PreviewWindow(tk.Toplevel):
         self._refresh_excl_overlay()
 
     def _refresh_excl_overlay(self) -> None:
-        """Repaint the translucent-red exclusion overlay on the thumbnail."""
+        """Repaint the translucent exclusion overlay on the thumbnail, using the same
+        magenta as the 'excluded' overlay layer (cfg.overlay.excluded_color/alpha) so
+        the brush matches the rendered layer."""
         if self.excl_mask is None:
             return
+        col = self.cfg.overlay.excluded_color
+        a = float(self.cfg.overlay.excluded_alpha)
         rgba = np.zeros((*self.excl_mask.shape, 4), np.float32)
-        rgba[self.excl_mask > 0] = (1.0, 0.0, 0.0, 0.4)
+        rgba[self.excl_mask > 0] = (col[0] / 255.0, col[1] / 255.0, col[2] / 255.0, a)
         if self._excl_artist is None:
             self._excl_artist = self.thumb_ax.imshow(rgba, interpolation="nearest")
         else:
@@ -488,6 +540,7 @@ class PreviewWindow(tk.Toplevel):
         if self.excl_mask is not None:
             self.excl_mask[:] = 0
             self._refresh_excl_overlay()
+        self._update_excl_buttons()
         self.status.configure(text="exclusion cleared (Save excl to persist)")
 
     def on_save_exclude(self) -> None:
@@ -504,14 +557,20 @@ class PreviewWindow(tk.Toplevel):
             if p.exists():
                 p.unlink()
             self.cfg.scenes.get(key, {}).pop("exclude_mask", None)
+            self._update_excl_buttons()
             self.status.configure(text="exclusion mask empty — removed")
             return
         p.parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(p), self.excl_mask)
         self.cfg.scenes.setdefault(key, {})["exclude_mask"] = rel
         self._mark_dirty()
+        self._update_excl_buttons()
         self.status.configure(
             text=f"saved exclusion mask → {p.name}  (Export → config to persist)")
+        messagebox.showinfo(
+            "Exclusion saved",
+            f"Wrote {p.name}.\nThe section's config now points at it; click "
+            "'Export → config' to persist the link for the batch run.", parent=self)
 
     def _roi_exclude_crop(self) -> np.ndarray | None:
         """The exclusion mask cropped + scaled to the open ROI (bool), or None."""
@@ -661,6 +720,7 @@ class PreviewWindow(tk.Toplevel):
         self.disp_rgb = rgb
         self.thumb_ax.clear()
         self._excl_artist = None                 # cleared with the axes
+        self._brush_cursor = None                # patch removed with the axes clear
         self.thumb_ax.set_axis_off()
         self.thumb_ax.imshow(self._wb(rgb, "disp") if self.wb_on.get() else rgb)
         # exclusion mask follows the display resolution (load saved on a fresh section)
@@ -689,6 +749,7 @@ class PreviewWindow(tk.Toplevel):
         # Selector stays inactive here (left-drag pans by default); activation is
         # owned by Draw/Open/Clear ROI + the brush, not by reloading the display.
         self._refresh_excl_overlay()
+        self._update_excl_buttons()
         if self.roi_rgb is None:
             self.status.configure(
                 text=f"{self.entry.alias}: drag to pan; 'Draw ROI' to select a region.")
