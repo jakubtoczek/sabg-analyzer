@@ -159,36 +159,47 @@ class PreviewWindow(tk.Toplevel):
     def _build_thumb_tab(self) -> None:
         tab = tk.Frame(self.nb)
         self.nb.add(tab, text="Thumbnail")
-        bar = tk.Frame(tab)
-        bar.pack(fill="x")
-        self.btn_draw_roi = tk.Button(bar, text="Draw ROI", command=self.on_draw_roi)
+        # Two-row toolbar so nothing clips at the default width: row 1 = ROI buttons +
+        # resolution, row 2 = shared view tools. Collapsible strips open BELOW the whole
+        # container (after `barwrap`), not inside a single row.
+        barwrap = tk.Frame(tab)
+        barwrap.pack(fill="x")
+        row1 = tk.Frame(barwrap)
+        row1.pack(fill="x")
+        row2 = tk.Frame(barwrap)
+        row2.pack(fill="x")
+
+        self.btn_draw_roi = tk.Button(row1, text="Draw ROI", command=self.on_draw_roi)
         self.btn_draw_roi.pack(side="left", padx=2, pady=2)
         # Drawing no longer auto-opens: adjust the rectangle, then "Open ROI".
-        self.btn_open_roi = tk.Button(bar, text="Open ROI", command=self.on_open_roi,
+        self.btn_open_roi = tk.Button(row1, text="Open ROI", command=self.on_open_roi,
                                       state="disabled")
         self.btn_open_roi.pack(side="left", padx=2)
-        self.btn_clear_roi = tk.Button(bar, text="Clear ROI", command=self.clear_roi,
+        self.btn_clear_roi = tk.Button(row1, text="Clear ROI", command=self.clear_roi,
                                        state="disabled")
         self.btn_clear_roi.pack(side="left", padx=2)
-        tk.Label(bar, text="resolution").pack(side="left", padx=(10, 0))
+        tk.Label(row1, text="resolution").pack(side="left", padx=(10, 0))
         labels = self._res_labels()
-        ttk.OptionMenu(bar, self.view_res, labels[0], *labels,
+        ttk.OptionMenu(row1, self.view_res, labels[0], *labels,
                        command=lambda _v: self._reload_display()).pack(side="left")
-        self.res_label = tk.Label(bar, text="loaded: —", fg="#557", font=("Segoe UI", 8))
+        self.res_label = tk.Label(row1, text="loaded: —", fg="#557", font=("Segoe UI", 8))
         self.res_label.pack(side="left", padx=(6, 0))
-        self._add_shared_tools(bar, "thumb")
 
+        # row 2: shared view tools + the exclusion-brush toggle (strips open below barwrap)
+        self._add_shared_tools(row2, "thumb", strip_parent=tab, after_widget=barwrap)
         # manual exclusion brush in a collapsed strip (paint regions out of
         # numerator+denominator; rarely needed, e.g. muscle next to tumour)
-        bar2 = self._collapsible_strip(bar, tab, "✏ exclusion")
+        bar2 = self._collapsible_strip(row2, tab, "✏ exclusion", after_widget=barwrap)
         tk.Label(bar2, text="exclusion:").pack(side="left", padx=(2, 2))
         for txt, val in (("off", "off"), ("draw ✏", "draw"), ("erase ⌫", "erase")):
             tk.Radiobutton(bar2, text=txt, value=val, variable=self.brush_var,
                            command=self._on_brush_mode).pack(side="left")
         tk.Label(bar2, text="size").pack(side="left", padx=(8, 0))
         ttk.Scale(bar2, from_=2, to=60, variable=self.brush_size, length=90).pack(side="left")
-        tk.Button(bar2, text="Clear excl", command=self.on_clear_exclude).pack(side="left", padx=(8, 2))
-        tk.Button(bar2, text="Save excl", command=self.on_save_exclude).pack(side="left", padx=2)
+        self.btn_clear_excl = tk.Button(bar2, text="Clear excl", command=self.on_clear_exclude)
+        self.btn_clear_excl.pack(side="left", padx=(8, 2))
+        self.btn_save_excl = tk.Button(bar2, text="Save excl", command=self.on_save_exclude)
+        self.btn_save_excl.pack(side="left", padx=2)
 
         self.thumb_fig = Figure(figsize=(6, 6), tight_layout=True)
         self.thumb_ax = self.thumb_fig.add_subplot(111)
@@ -240,42 +251,56 @@ class PreviewWindow(tk.Toplevel):
         sel = getattr(self, "selector", None)
         return self.brush_mode is None and not (sel is not None and sel.get_active())
 
-    def _collapsible_strip(self, toolbar: tk.Frame, parent: tk.Frame,
-                           label: str) -> tk.Frame:
-        """A horizontal strip (packed under *toolbar* in *parent* when expanded),
-        toggled by a button on *toolbar*. Collapsed by default — for rarely-used
-        controls (scale bar, exclusion brush)."""
-        strip = tk.Frame(parent)
-        btn = tk.Button(toolbar, relief="groove")
+    def _collapsible_strip(self, btn_parent: tk.Frame, strip_parent: tk.Frame,
+                           label: str, after_widget: tk.Widget | None = None) -> tk.Frame:
+        """A horizontal strip (a child of *strip_parent*, packed after *after_widget*
+        when expanded) toggled by a button on *btn_parent*. Collapsed by default — for
+        rarely-used controls (scale bar, exclusion brush). *after_widget* defaults to
+        *btn_parent* so the strip opens just below it; pass the toolbar container to open
+        below a multi-row toolbar."""
+        strip = tk.Frame(strip_parent)
+        after = after_widget if after_widget is not None else btn_parent
+        btn = tk.Button(btn_parent, relief="groove")
 
         def toggle():
             if strip.winfo_manager():
                 strip.pack_forget()
                 btn.configure(text=f"{label} ▸")
             else:
-                strip.pack(fill="x", after=toolbar)
+                strip.pack(fill="x", after=after)
                 btn.configure(text=f"{label} ▾")
 
         btn.configure(text=f"{label} ▸", command=toggle)
         btn.pack(side="left", padx=(8, 2))
         return strip
 
-    def _add_shared_tools(self, bar: tk.Frame, source: str) -> None:
+    def _add_shared_tools(self, bar: tk.Frame, source: str, *,
+                          strip_parent: tk.Frame | None = None,
+                          after_widget: tk.Widget | None = None) -> None:
         """Controls present on BOTH tabs: Reset view, white-balance toggle, a
-        collapsible scale-bar strip (length/label/corner + preview), Export, Help."""
+        collapsible scale-bar strip (length/label/corner + preview), Export, Help.
+
+        *strip_parent*/*after_widget* place the collapsible scale-bar strip; they
+        default to opening just below *bar* (single-row ROI toolbar). The thumbnail tab
+        passes its 2-row container so the strip opens below both rows."""
+        if strip_parent is None:
+            strip_parent = bar.master
+        if after_widget is None:
+            after_widget = bar
         tk.Button(bar, text="Reset view",
                   command=lambda: self._nav(source).reset()).pack(side="left", padx=(10, 2))
         tk.Checkbutton(bar, text="white-balanced", variable=self.wb_on,
                        command=self._on_wb_toggle).pack(side="left", padx=(8, 2))
         # scale-bar controls live in a collapsed strip (rarely changed)
-        sb = self._collapsible_strip(bar, bar.master, "⚖ scale bar")
+        sb = self._collapsible_strip(bar, strip_parent, "⚖ scale bar",
+                                     after_widget=after_widget)
         tk.Label(sb, text="bar").pack(side="left", padx=(8, 0))
         ttk.OptionMenu(sb, self.sb_len, self.sb_len.get(), "Auto", "50", "100",
                        "200", "500", "1000").pack(side="left")
         tk.Checkbutton(sb, text="label", variable=self.sb_label).pack(side="left")
         ttk.OptionMenu(sb, self.sb_pos, self.sb_pos.get(),
                        *_SB_POS.keys()).pack(side="left")
-        cvp = tk.Canvas(sb, width=24, height=16, highlightthickness=1,
+        cvp = tk.Canvas(sb, width=84, height=40, highlightthickness=1,
                         highlightbackground="#aaa", bg="white")
         cvp.pack(side="left", padx=4)
         self._sb_preview_canvases.append(cvp)
