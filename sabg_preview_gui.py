@@ -86,6 +86,9 @@ class PreviewWindow(tk.Toplevel):
         self._busy = False
         self._recompute_pending = False
         self._recompute_job = None
+        # Serialise CZI decodes: pylibCZIrw's WIC/COM decoder is not re-entrant, so two
+        # concurrent reads raised COM-ERROR 0x88982F8B. Every open_czi read holds this.
+        self._czi_lock = threading.Lock()
 
         self.entry: preview.SectionEntry | None = None     # selected section
         self.disp_rgb: np.ndarray | None = None            # thumb/overview shown for ROI draw
@@ -411,9 +414,10 @@ class PreviewWindow(tk.Toplevel):
         import pylibCZIrw.czi as pyczi
         from sabg_analyzer import pipeline
         prog = _GuiProgress(self.q)
-        with pyczi.open_czi(scene.path) as doc:
-            row = pipeline.analyze_scene(doc, scene, cfg, Path(self.out_dir),
-                                         alias=alias, progress=prog)
+        with self._czi_lock:                       # serialise CZI decodes (see __init__)
+            with pyczi.open_czi(scene.path) as doc:
+                row = pipeline.analyze_scene(doc, scene, cfg, Path(self.out_dir),
+                                             alias=alias, progress=prog)
         pipeline._write_cache(Path(self.out_dir), scene, cfg, row)  # skip-on-analyze
         return ("section", row, scene.pixel_size_um)
 
@@ -732,9 +736,10 @@ class PreviewWindow(tk.Toplevel):
         import pylibCZIrw.czi as pyczi
         um = max(self.cfg.maps_um_per_px * 0.25, self.cfg.thumb_um_per_px / mult)
         edge = min(self.cfg.maps_max_edge, int(self.cfg.thumb_max_edge * mult))
-        with pyczi.open_czi(scene.path) as doc:
-            rgb, _ = preview.czi_io.read_overview(
-                doc, scene, max_edge=edge, zoom_cap=1.0, um_per_px=um)
+        with self._czi_lock:                       # serialise CZI decodes (see __init__)
+            with pyczi.open_czi(scene.path) as doc:
+                rgb, _ = preview.czi_io.read_overview(
+                    doc, scene, max_edge=edge, zoom_cap=1.0, um_per_px=um)
         return ("display", rgb)
 
     def _show_display(self, rgb: np.ndarray) -> None:
@@ -843,8 +848,9 @@ class PreviewWindow(tk.Toplevel):
     def _read_roi(self, scene, rect):
         import pylibCZIrw.czi as pyczi
         x, y, w, h = rect
-        with pyczi.open_czi(scene.path) as doc:
-            rgb = preview.read_roi(doc, x, y, w, h, 1.0)
+        with self._czi_lock:                       # serialise CZI decodes (see __init__)
+            with pyczi.open_czi(scene.path) as doc:
+                rgb = preview.read_roi(doc, x, y, w, h, 1.0)
         return ("roi", rgb, scene.pixel_size_um)
 
     def clear_roi(self, refresh: bool = True) -> None:
@@ -933,8 +939,14 @@ class PreviewWindow(tk.Toplevel):
 
     # -- worker plumbing ---------------------------------------------------
     def _submit(self, fn, *args, tag="") -> None:
-        if self._busy and tag == "layers":
-            self._recompute_pending = True
+        if self._busy:
+            # A recompute coalesces (run once the current task ends); a heavy CZI read
+            # (display/roi/section) must NOT start a second concurrent decode — drop it
+            # and ask the user to retry (the _czi_lock is the final safety net).
+            if tag == "layers":
+                self._recompute_pending = True
+            else:
+                self.status.configure(text="busy — wait for the current read to finish")
             return
         self._busy = True
         self.status.configure(text="working…")
