@@ -317,15 +317,18 @@ DETECTION_GROUPS = [
      "Reject thin dark edge-shadow rims wrongly counted as positive."),
 ]
 
-# Layers drawn in pipeline order: (key, colour attr, alpha attr, default show).
+# Layers in composite DRAW order (bottom -> top; last = on top). The order traces the
+# pipeline: exclusion masks first, then the pre-rejection candidate, the fold/edge
+# rejections, and finally SABG+ painted over everything so the kept positives stay visible.
+# (key, colour attr, alpha attr, default show).
 LAYER_SPEC = [
     ("nontissue", "nontissue_color", "nontissue_alpha", True),
     ("excluded", "excluded_color", "excluded_alpha", True),
     ("artifact", "artifact_color", "artifact_alpha", True),
-    ("fold", "fold_color", "fold_alpha", True),
     ("sabg_candidate", "sabg_candidate_color", "sabg_candidate_alpha", False),
-    ("sabg", "sabg_color", "sabg_alpha", True),
+    ("fold", "fold_color", "fold_alpha", True),
     ("edge_removed", "edge_color", "edge_alpha", True),
+    ("sabg", "sabg_color", "sabg_alpha", True),
 ]
 LAYER_LABELS = {"nontissue": "non-tissue", "excluded": "excluded", "artifact": "artifact",
                 "fold": "fold", "sabg_candidate": "candidate SABG+", "sabg": "SABG+",

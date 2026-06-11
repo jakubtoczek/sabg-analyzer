@@ -49,8 +49,8 @@ class OverlayParams:
     fold_color: tuple[int, int, int] = (255, 140, 0)    # linear-fold band (orange)
     fold_alpha: float = 0.60                            # fold blend strength
     fold_show_sabg: bool = True   # draw rejected SABG+ (green) on top of the fold band
-    edge_color: tuple[int, int, int] = (60, 120, 255)   # edge-shadow rejection (blue)
-    edge_alpha: float = 0.50                            # edge blend strength
+    edge_color: tuple[int, int, int] = (138, 43, 226)   # edge-shadow rejection (violet; high-contrast)
+    edge_alpha: float = 0.60                            # edge blend strength
     show_edge_rejected: bool = True                     # draw the edge-rejected pixels
     nontissue_color: tuple[int, int, int] = (150, 150, 150)  # glass/background (grey)
     nontissue_alpha: float = 0.50                       # non-tissue shade strength

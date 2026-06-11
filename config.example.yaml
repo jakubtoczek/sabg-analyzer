@@ -197,8 +197,8 @@ overlay:
   fold_color: [255, 140, 0]    # RGB highlight for the linear-fold band (orange)
   fold_alpha: 0.60             # fold blend strength (0-1)
   fold_show_sabg: true         # also draw the rejected SABG+ (green) inside the orange band
-  edge_color: [60, 120, 255]   # RGB highlight for edge-shadow rejected pixels (blue)
-  edge_alpha: 0.50             # edge blend strength (0-1)
+  edge_color: [138, 43, 226]   # RGB highlight for edge-shadow rejected pixels (violet; high-contrast)
+  edge_alpha: 0.60             # edge blend strength (0-1)
   show_edge_rejected: true     # draw the edge-rejected pixels in the overlay
   nontissue_color: [150, 150, 150]  # RGB shade for glass/background (grey)
   nontissue_alpha: 0.50        # non-tissue shade strength (0-1; higher = easier to see)
