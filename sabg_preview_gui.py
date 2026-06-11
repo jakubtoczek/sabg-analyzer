@@ -116,6 +116,8 @@ class PreviewWindow(tk.Toplevel):
         self.field_vars: dict[tuple[str, str], tk.Variable] = {}
         self._photo_refs: list[tk.PhotoImage] = []         # keep picker thumbs alive
         self._dirty = False
+        self._params_dirty = False                         # tuning changed since last 'Export → config'
+        self._excl_dirty = False                           # exclusion painted/cleared but not 'Save excl'-ed
         self._reflecting = False                           # suppress recompute while
         #                          reflecting the auto threshold back into the seed box
 
@@ -547,6 +549,7 @@ class PreviewWindow(tk.Toplevel):
         val = 255 if self.brush_mode == "draw" else 0
         cx, cy = int(round(x)), int(round(y))
         cv2.circle(self.excl_mask, (cx, cy), r, val, -1)
+        self._excl_dirty = True              # painted but not yet 'Save excl'-ed
         # Per-stroke: update ONLY the stamp's bounding box in the persistent RGBA buffer
         # (was rebuilding a full H×W×4 float every motion → slow on large thumbs).
         if self._excl_rgba is None or self._excl_artist is None:
@@ -580,6 +583,8 @@ class PreviewWindow(tk.Toplevel):
 
     def on_clear_exclude(self) -> None:
         if self.excl_mask is not None:
+            if (self.excl_mask > 0).any():
+                self._excl_dirty = True      # clearing a non-empty mask is an unsaved change
             self.excl_mask[:] = 0
             self._refresh_excl_overlay()
         self._update_excl_buttons()
@@ -592,6 +597,7 @@ class PreviewWindow(tk.Toplevel):
         by 'Export → config' (consistent with the other tuned settings)."""
         if self.entry is None or self.excl_mask is None:
             return
+        self._excl_dirty = False             # both branches below persist the current state
         key = self.entry.scene.key
         rel = f"exclude/{self.entry.scene.slug}.png"
         p = Path(self.out_dir) / rel
@@ -714,9 +720,12 @@ class PreviewWindow(tk.Toplevel):
 
     # -- section / ROI -----------------------------------------------------
     def _select_section(self, entry: preview.SectionEntry) -> None:
+        if entry is not self.entry and not self._confirm_discard_exclusion("switch sections"):
+            return                            # keep the current section + its unsaved mask
         self.entry = entry
         self.clear_roi(refresh=False)         # switching sections clears any ROI
         self.excl_mask = None                 # reload the section's mask (or blank)
+        self._excl_dirty = False              # a freshly loaded section starts clean
         self._excl_artist = None
         self.brush_var.set("off")
         self.brush_mode = None
@@ -1012,6 +1021,7 @@ class PreviewWindow(tk.Toplevel):
 
     def _mark_dirty(self) -> None:
         self._dirty = True
+        self._params_dirty = True            # a config-affecting change is now pending export
         self.dirty_dot.configure(text="● changed", fg="#c8862a")
         self.btn_recompute.configure(bg="#c8862a", activebackground="#a86f22")
 
@@ -1283,6 +1293,7 @@ class PreviewWindow(tk.Toplevel):
         try:
             dst.parent.mkdir(parents=True, exist_ok=True)
             preview.export_config(self.cfg, dst)
+            self._params_dirty = False
             self.status.configure(text=f"exported settings → {dst}")
             messagebox.showinfo("Exported", f"Settings written to\n{dst}", parent=self)
         except Exception as exc:
@@ -1356,5 +1367,26 @@ class PreviewWindow(tk.Toplevel):
              "Writes the current settings to config.yaml for the batch analyze/export."),
         ])
 
+    def _confirm_discard_exclusion(self, action: str) -> bool:
+        """True to proceed; if an exclusion mask is painted-but-unsaved, ask first."""
+        if not self._excl_dirty:
+            return True
+        alias = self.entry.alias if self.entry is not None else "this section"
+        return messagebox.askyesno(
+            "Unsaved exclusion",
+            f"The exclusion mask for {alias} hasn't been saved (Save excl).\n"
+            f"Discard it and {action}?",
+            parent=self, default="no", icon="warning")
+
     def _on_close(self) -> None:
+        pending = []
+        if self._excl_dirty:
+            pending.append("• an unsaved exclusion mask (use 'Save excl')")
+        if self._params_dirty:
+            pending.append("• tuning changes not written to config (use 'Export → config')")
+        if pending and not messagebox.askyesno(
+                "Close Preview?",
+                "You have:\n" + "\n".join(pending) + "\n\nClose anyway?",
+                parent=self, default="no", icon="warning"):
+            return
         self.destroy()
