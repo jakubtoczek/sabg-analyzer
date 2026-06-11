@@ -826,15 +826,47 @@ class PreviewWindow(tk.Toplevel):
             self.status.configure(
                 text=f"{self.entry.alias}: drag to pan; 'Draw ROI' to select a region.")
             return
-        if self.roi_rgb is not None:           # start a fresh ROI
+        if self.roi_rgb is not None:           # an opened ROI -> start a fresh one
             self.clear_roi()
         self.brush_var.set("off")              # drawing is exclusive with the brush
         self.brush_mode = None
-        self.roi_rect = None
         self.nb.select(0)
         self._set_draw_active(True)
-        self.status.configure(text="drag a rectangle (adjust the handles, then 'Open ROI').")
+        if self.roi_rect is not None and self.disp_rgb is not None:
+            # Re-activating with a still-pending rectangle: keep it and let the user
+            # edit it (don't erase), re-seeding the on-screen handles from the stored rect.
+            self._sync_selector_to_rect()
+            self.status.configure(
+                text="edit the rectangle (drag the handles), then 'Open ROI'.")
+        else:
+            self.roi_rect = None
+            self.status.configure(
+                text="drag a rectangle (adjust the handles, then 'Open ROI').")
         self._update_roi_buttons()
+
+    def _rect_to_extents(self, rect: tuple[int, int, int, int]) -> tuple:
+        """Full-res (x, y, w, h) -> on-screen selector extents in display pixels."""
+        x, y, ww, hh = rect
+        h, w = self.disp_rgb.shape[:2]
+        sc = self.entry.scene
+        tx0 = (x - sc.x) * w / max(sc.w, 1)
+        ty0 = (y - sc.y) * h / max(sc.h, 1)
+        return (tx0, tx0 + ww * w / max(sc.w, 1),
+                ty0, ty0 + hh * h / max(sc.h, 1))
+
+    def _sync_selector_to_rect(self) -> None:
+        """Reflect the stored full-res ``roi_rect`` onto the on-screen selector so a
+        re-activated Draw ROI edits the existing rectangle instead of erasing it."""
+        if self.roi_rect is None or self.disp_rgb is None or self.entry is None:
+            return
+        self._setting_extents = True
+        try:
+            self.selector.extents = self._rect_to_extents(self.roi_rect)
+            if hasattr(self.selector, "set_visible"):
+                self.selector.set_visible(True)
+        finally:
+            self._setting_extents = False
+        self.thumb_canvas.draw_idle()
 
     def _on_rect(self, eclick, erelease) -> None:
         if self._setting_extents or self.entry is None or self.disp_rgb is None:
@@ -850,13 +882,9 @@ class PreviewWindow(tk.Toplevel):
         self.roi_rect = (x, y, ww, hh)
         # reflect the cap back onto the on-screen rectangle (held at the cap)
         sc = self.entry.scene
-        tx0 = (x - sc.x) * w / max(sc.w, 1)
-        ty0 = (y - sc.y) * h / max(sc.h, 1)
-        tw = ww * w / max(sc.w, 1)
-        th = hh * h / max(sc.h, 1)
         self._setting_extents = True
         try:
-            self.selector.extents = (tx0, tx0 + tw, ty0, ty0 + th)
+            self.selector.extents = self._rect_to_extents(self.roi_rect)
         finally:
             self._setting_extents = False
         um = ww * sc.pixel_size_um if sc.pixel_size_um else 0
