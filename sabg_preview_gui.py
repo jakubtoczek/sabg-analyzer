@@ -115,6 +115,9 @@ class PreviewWindow(tk.Toplevel):
         self.show_vars: dict[str, tk.BooleanVar] = {}
         self.field_vars: dict[tuple[str, str], tk.Variable] = {}
         self._photo_refs: list[tk.PhotoImage] = []         # keep picker thumbs alive
+        self._sections: list | None = None                 # cached SectionEntry objs (stable identity)
+        self.order_mode = tk.StringVar(value=gw.SECTION_ORDER_MODES[0])
+        self._picker = None                                # picker handle (marker + arrow nav)
         self._dirty = False
         self._params_dirty = False                         # tuning changed since last 'Export → config'
         self._excl_dirty = False                           # exclusion painted/cleared but not 'Save excl'-ed
@@ -147,6 +150,13 @@ class PreviewWindow(tk.Toplevel):
 
         left = tk.Frame(paned)
         tk.Label(left, text="Sections", font=("Segoe UI", 9, "bold")).pack(pady=(6, 2))
+        orow = tk.Frame(left)
+        orow.pack(fill="x", padx=4)
+        tk.Label(orow, text="order", font=("Segoe UI", 8)).pack(side="left")
+        ttk.OptionMenu(orow, self.order_mode, gw.SECTION_ORDER_MODES[0],
+                       *gw.SECTION_ORDER_MODES,
+                       command=lambda _v: self._populate_picker(refetch=False)).pack(
+                           side="left", fill="x", expand=True)
         self.pick = gw.ScrollFrame(left)
         self.pick.pack(fill="both", expand=True)
 
@@ -708,21 +718,31 @@ class PreviewWindow(tk.Toplevel):
         self.manual_thr.trace_add("write", lambda *_: self._on_manual_seed_edit())
 
     # -- picker ------------------------------------------------------------
-    def _populate_picker(self) -> None:
-        try:
-            entries = preview.list_sections(self.data_dir, self.out_dir, self.cfg)
-        except Exception as exc:
-            tk.Label(self.pick.interior, text=f"(error: {exc})", wraplength=160,
-                     fg="red").pack()
-            return
-        gw.thumbnail_picker(self.pick.interior, entries, self._select_section,
-                            self._photo_refs)
+    def _populate_picker(self, refetch: bool = True) -> None:
+        if refetch or self._sections is None:
+            try:
+                self._sections = preview.list_sections(self.data_dir, self.out_dir, self.cfg)
+            except Exception as exc:
+                self._sections = None
+                self._picker = None
+                tk.Label(self.pick.interior, text=f"(error: {exc})", wraplength=160,
+                         fg="red").pack()
+                return
+        for w in self.pick.interior.winfo_children():     # rebuild (first build / order change)
+            w.destroy()
+        self._photo_refs.clear()
+        ordered = gw.order_sections(self._sections, self.order_mode.get(), self.out_dir)
+        self._picker = gw.thumbnail_picker(
+            self.pick.interior, ordered, self._select_section, self._photo_refs,
+            selected=self.entry)
 
     # -- section / ROI -----------------------------------------------------
     def _select_section(self, entry: preview.SectionEntry) -> None:
         if entry is not self.entry and not self._confirm_discard_exclusion("switch sections"):
             return                            # keep the current section + its unsaved mask
         self.entry = entry
+        if self._picker is not None:
+            self._picker.highlight(entry)     # mark the current section in the list
         self.clear_roi(refresh=False)         # switching sections clears any ROI
         self.excl_mask = None                 # reload the section's mask (or blank)
         self._excl_dirty = False              # a freshly loaded section starts clean

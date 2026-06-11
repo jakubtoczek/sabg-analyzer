@@ -79,6 +79,8 @@ class InfoWindow(tk.Toplevel):
         self._row_anchor: dict[tuple[str, str], tk.Widget] = {}
         self.entries: list = []
         self.cur_idx = 0
+        self._picker = None                           # picker handle (marker + arrow nav)
+        self.order_mode = tk.StringVar(value=gw.SECTION_ORDER_MODES[0])
         self._raw = {"label": None, "thumb": None}   # raw RGB per viewer tab
         self._rot = {"label": 0, "thumb": 0}          # 90° rotations per tab
         self.figs = {}; self.axes = {}; self.canvases = {}; self.navs = {}
@@ -100,15 +102,22 @@ class InfoWindow(tk.Toplevel):
 
         left = tk.Frame(paned)
         tk.Label(left, text="Sections", font=("Segoe UI", 9, "bold")).pack(pady=(6, 2))
-        pick = gw.ScrollFrame(left)
-        pick.pack(fill="both", expand=True)
+        orow = tk.Frame(left)
+        orow.pack(fill="x", padx=4)
+        tk.Label(orow, text="order", font=("Segoe UI", 8)).pack(side="left")
+        ttk.OptionMenu(orow, self.order_mode, gw.SECTION_ORDER_MODES[0],
+                       *gw.SECTION_ORDER_MODES,
+                       command=lambda _v: self._populate_picker()).pack(
+                           side="left", fill="x", expand=True)
+        self._pick = gw.ScrollFrame(left)
+        self._pick.pack(fill="both", expand=True)
         try:
             self.entries = preview.list_sections(self.data_dir, self.out_dir, self.cfg)
-            gw.thumbnail_picker(pick.interior, self.entries, self._on_pick,
-                                self._photo_refs)
         except Exception as exc:
-            tk.Label(pick.interior, text=f"(picker error: {exc})",
+            self.entries = []
+            tk.Label(self._pick.interior, text=f"(picker error: {exc})",
                      wraplength=160, fg="red").pack()
+        self._populate_picker()
 
         center = tk.Frame(paned)
         self._build_viewer(center)
@@ -172,6 +181,23 @@ class InfoWindow(tk.Toplevel):
         except tk.TclError:
             return "label"
 
+    def _populate_picker(self) -> None:
+        """(Re)build the left thumbnail list in the chosen order. The table keeps the
+        scan order; only the picker display reorders (same entry objects, so the
+        current-section marker still matches by identity)."""
+        if not hasattr(self, "_pick"):
+            return
+        for w in self._pick.interior.winfo_children():
+            w.destroy()
+        self._photo_refs.clear()
+        if not self.entries:
+            self._picker = None
+            return
+        ordered = gw.order_sections(self.entries, self.order_mode.get(), self.out_dir)
+        cur = self.entries[self.cur_idx] if 0 <= self.cur_idx < len(self.entries) else None
+        self._picker = gw.thumbnail_picker(
+            self._pick.interior, ordered, self._on_pick, self._photo_refs, selected=cur)
+
     def _on_pick(self, entry) -> None:
         for i, e in enumerate(self.entries):
             if e.scene.key == entry.scene.key:
@@ -179,7 +205,9 @@ class InfoWindow(tk.Toplevel):
                 return
 
     def _step(self, d: int) -> None:
-        if self.entries:
+        if self._picker is not None and self._picker.order:
+            self._picker.step(d)              # follow the chosen list order
+        elif self.entries:
             self._show_section((self.cur_idx + d) % len(self.entries))
 
     def _show_section(self, idx: int) -> None:
@@ -187,6 +215,8 @@ class InfoWindow(tk.Toplevel):
             return
         self.cur_idx = idx % len(self.entries)
         entry = self.entries[self.cur_idx]
+        if self._picker is not None:
+            self._picker.highlight(entry)             # mark the current section in the list
         self._rot = {"label": 0, "thumb": 0}
         self.view_title.configure(
             text=f"{entry.alias}   [{self.cur_idx + 1}/{len(self.entries)}]")

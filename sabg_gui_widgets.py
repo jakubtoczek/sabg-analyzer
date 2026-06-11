@@ -930,19 +930,121 @@ def build_layers_panel(parent, cfg, show_vars: dict, on_change: Callable) -> Non
 # ---------------------------------------------------------------------------
 # section thumbnail picker
 # ---------------------------------------------------------------------------
+# section-list ordering offered by the picker (D7). "Scan order" is the file/scene
+# order from Scan; the rest are convenience views. %SABG needs a results.csv.
+SECTION_ORDER_MODES = ("Scan order", "Alias A–Z", "%SABG ↓")
+
+
+def order_sections(entries, mode: str, out_dir=None):
+    """Return *entries* reordered for the picker (same objects, so identity marks
+    still match). Unknown/absent data falls back to scan order."""
+    es = list(entries)
+    if mode == "Alias A–Z":
+        return sorted(es, key=lambda e: str(e.alias).lower())
+    if mode == "%SABG ↓":
+        pct = _results_pct(out_dir)
+        if pct:
+            return sorted(es, key=lambda e: pct.get(e.scene.key, -1.0), reverse=True)
+    return es                                          # "Scan order" (default)
+
+
+def _results_pct(out_dir) -> dict:
+    """{scene key -> pct_sabg} from <out_dir>/results.csv, or {} if unavailable."""
+    if not out_dir:
+        return {}
+    import csv
+    from pathlib import Path
+    p = Path(out_dir) / "results.csv"
+    if not p.exists():
+        return {}
+    out: dict = {}
+    try:
+        with open(p, newline="", encoding="utf-8") as fh:
+            for row in csv.DictReader(fh):
+                try:
+                    out[row["key"]] = float(row["pct_sabg"])
+                except (KeyError, ValueError, TypeError):
+                    pass
+    except Exception:
+        return {}
+    return out
+
+
+class _PickerHandle:
+    """Returned by :func:`thumbnail_picker`. Tracks each section's cell so the caller
+    can mark the current section and step through them with the arrow keys."""
+    _SEL_BG = "#dce9ff"
+    _SEL_BORDER = "#1e6fff"
+
+    def __init__(self, order, on_select):
+        self.order = list(order)                       # entries in render order
+        self.on_select = on_select
+        self.cells: dict = {}                          # id(entry) -> (cell, label, button)
+        self._base_bg = None
+        self.current = None
+
+    def _add(self, entry, cell, label, button) -> None:
+        if self._base_bg is None:
+            self._base_bg = cell.cget("background")
+        self.cells[id(entry)] = (cell, label, button)
+
+    def highlight(self, entry) -> None:
+        """Mark *entry*'s cell as current (border + tint + bold) and scroll it into view."""
+        self.current = entry
+        for key, (cell, label, _btn) in self.cells.items():
+            on = key == id(entry)
+            bg = self._SEL_BG if on else self._base_bg
+            try:
+                cell.configure(background=bg, highlightthickness=2 if on else 0,
+                               highlightbackground=self._SEL_BORDER)
+                label.configure(background=bg,
+                                font=("Segoe UI", 7, "bold") if on
+                                else ("Segoe UI", 7))
+            except Exception:
+                pass
+        self._scroll_to(entry)
+
+    def _scroll_to(self, entry) -> None:
+        rec = self.cells.get(id(entry))
+        if not rec:
+            return
+        cell = rec[0]
+        try:                                           # interior -> canvas (ScrollFrame)
+            canvas = cell.master.master
+            cell.update_idletasks()
+            total = cell.master.winfo_height() or 1
+            canvas.yview_moveto(max(0.0, (cell.winfo_y() - 20) / total))
+        except Exception:
+            pass
+
+    def step(self, delta: int) -> str:
+        """Select the section *delta* away in the current order (wraps). Returns
+        "break" so it can be used directly as a key binding."""
+        if self.order:
+            try:
+                i = self.order.index(self.current)
+            except ValueError:
+                i = 0
+            self.on_select(self.order[(i + delta) % len(self.order)])
+        return "break"
+
+
 def thumbnail_picker(parent, entries, on_select: Callable, photo_refs: list,
-                     *, target_px: int = 150) -> None:
+                     *, target_px: int = 150, selected=None) -> "_PickerHandle":
     """Render proportional section thumbnails into *parent* (a frame).
 
     *entries* are ``preview.SectionEntry`` (``.thumb_path``, ``.alias``,
     ``.skipped``). One shared integer subsample factor keeps thumbs proportional.
-    PhotoImage refs are appended to *photo_refs* to keep them alive.
+    PhotoImage refs are appended to *photo_refs* to keep them alive. Returns a
+    :class:`_PickerHandle` so the caller can mark the current section and bind the
+    arrow keys; the thumbnail buttons take focus and step prev/next with Up/Down.
     """
+    handle = _PickerHandle(entries, on_select)
     have_thumbs = [e for e in entries if e.thumb_path.exists()]
     if not have_thumbs:
         tk.Label(parent, text="No thumbnails.\nRun Scan first.",
                  wraplength=160, fg="#a00").pack(pady=10)
-        return
+        return handle
     # Load each PhotoImage once (to size the shared subsample factor) and reuse it.
     originals: dict = {}
     longest = 1
@@ -955,8 +1057,9 @@ def thumbnail_picker(parent, entries, on_select: Callable, photo_refs: list,
         longest = max(longest, img.width(), img.height())
     factor = max(1, -(-longest // target_px))          # ceil(longest / target_px)
     for e in entries:
-        cell = tk.Frame(parent, padx=2, pady=3)
+        cell = tk.Frame(parent, padx=2, pady=3, highlightthickness=0)
         cell.pack(fill="x")
+        button = None
         if e.thumb_path.exists():
             orig = originals.get(e.thumb_path)
             try:
@@ -964,11 +1067,19 @@ def thumbnail_picker(parent, entries, on_select: Callable, photo_refs: list,
                     raise OSError("thumb unreadable")
                 img = orig.subsample(factor, factor)
                 photo_refs.append(img)
-                tk.Button(cell, image=img, relief="raised",
-                          command=lambda en=e: on_select(en)).pack()
+                button = tk.Button(cell, image=img, relief="raised", takefocus=True,
+                                   command=lambda en=e: on_select(en))
             except Exception:
-                tk.Button(cell, text=e.alias,
-                          command=lambda en=e: on_select(en)).pack()
+                button = tk.Button(cell, text=e.alias, takefocus=True,
+                                   command=lambda en=e: on_select(en))
+            button.pack()
+            button.bind("<Up>", lambda _ev: handle.step(-1))
+            button.bind("<Down>", lambda _ev: handle.step(1))
         txt = e.alias + ("  (skip)" if e.skipped else "")
-        tk.Label(cell, text=txt, font=("Segoe UI", 7),
-                 fg="#888" if e.skipped else "#000").pack()
+        lbl = tk.Label(cell, text=txt, font=("Segoe UI", 7),
+                       fg="#888" if e.skipped else "#000")
+        lbl.pack()
+        handle._add(e, cell, lbl, button)
+    if selected is not None:
+        handle.highlight(selected)
+    return handle
