@@ -80,3 +80,32 @@ proven by the functional 77_Ctl run (see Verification).
 
 Verify: grep confirms no stale "edge-shadow = blue"; Python-3.10 + intensity.enabled wording
 present.
+
+---
+
+## Verification (all parts)
+
+- `compileall` clean across all touched modules.
+- Headless Tk smoke: `ConfigWindow` builds; layer panel order = `excluded, nontissue,
+  artifact, sabg_candidate, fold, edge_removed, sabg`; `('intensity','enabled')` field present.
+- Config round-trip: default `intensity.enabled=False`; snapshot emits the block;
+  enable→dump→reload preserves `True`; `edge_color=(138,43,226)`, `edge_alpha=0.6`.
+- **Functional — full-res analyze on 77_Ctl (`2026_05_29__10218:0`), scratch dirs**
+  (`..\_smoke13_off_out`, `..\_smoke13_on_out`; never touched `outputs7`):
+  - Both runs: **0.33% SABG, tissue 159,673,917 px** (anchor), identical artifact/fold/edge
+    counts → the layer reorder + intensity toggle do **not** change any number.
+  - OFF (`intensity.enabled` default false): results.csv has **no** OD columns; `pct_sabg`
+    column flows straight to `tissue_px`. `pct_sabg=0.3287`.
+  - ON (`--config ..\_smoke13_on.yaml`): `sabg_integrated_od=18124.175`,
+    `sabg_mean_od=0.034537` inserted right after `pct_sabg` (matches the A3.3 proof
+    ≈18124 / ≈0.0345); `pct_sabg=0.3287` unchanged.
+
+**Eyeball pending (Jakub):** `..\_smoke13_on_out\sections\2026_05_29__10218_s0_wb_overlay_fov_scalebar.jpg`
+— check SABG+ green now paints on top of edge-rejected, and the edge-rejected rims read in
+the new violet. Delete `..\_smoke13_off_out` / `..\_smoke13_on_out` + `..\_smoke13_on.yaml`
+once eyeballed.
+
+## Commits (local `main`, not pushed)
+- `5fd9d42` layer draw order + edge recolour
+- `bc98940` optional intensity (OD) quantification
+- `0531d75` README rework
