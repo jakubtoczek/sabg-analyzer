@@ -105,6 +105,7 @@ class PreviewWindow(tk.Toplevel):
         self.view_res = tk.StringVar()                     # px/µm label (supersedes gui.preview_hi_res)
         self._res_to_mult: dict[str, int] = {}             # label -> thumb multiplier
         self._loaded_um: float | None = None               # achieved µm/px of the shown image
+        self._pending_view_frac: tuple | None = None       # carry the zoomed view across a res change
         self.sb_len = tk.StringVar(value="Auto")           # scale-bar length (µm)
         self.sb_label = tk.BooleanVar(value=True)
         self.sb_pos = tk.StringVar(value="bottom-right")
@@ -193,7 +194,7 @@ class PreviewWindow(tk.Toplevel):
         tk.Label(row1, text="resolution").pack(side="left", padx=(10, 0))
         labels = self._res_labels()
         ttk.OptionMenu(row1, self.view_res, labels[0], *labels,
-                       command=lambda _v: self._reload_display()).pack(side="left")
+                       command=lambda _v: self._reload_display(preserve_view=True)).pack(side="left")
         self.res_label = tk.Label(row1, text="loaded: —", fg="#557", font=("Segoe UI", 8))
         self.res_label.pack(side="left", padx=(6, 0))
 
@@ -740,10 +741,16 @@ class PreviewWindow(tk.Toplevel):
             self.view_res.set(labels[0])
         return labels
 
-    def _reload_display(self) -> None:
-        """(Re)load the section's display image for ROI drawing (thumb or finer)."""
+    def _reload_display(self, preserve_view: bool = False) -> None:
+        """(Re)load the section's display image for ROI drawing (thumb or finer).
+
+        *preserve_view* (a resolution change, not a section switch) keeps the user
+        looking at the same area: the current zoom is captured as fractions of the
+        image and restored after the new image loads (both span the whole scene bbox).
+        """
         if self.entry is None:
             return
+        self._pending_view_frac = self._capture_view_frac() if preserve_view else None
         mult = self._res_to_mult.get(self.view_res.get(), 1)
         if mult <= 1:
             try:
@@ -799,6 +806,7 @@ class PreviewWindow(tk.Toplevel):
             self.res_label.configure(text="loaded: —")
         self.thumb_canvas.draw_idle()
         self.thumb_nav.set_home()
+        self._restore_pending_view()           # re-zoom to the carried area after a res change
         # Selector stays inactive here (left-drag pans by default); activation is
         # owned by Draw/Open/Clear ROI + the brush, not by reloading the display.
         self._refresh_excl_overlay()
@@ -806,6 +814,40 @@ class PreviewWindow(tk.Toplevel):
         if self.roi_rgb is None:
             self.status.configure(
                 text=f"{self.entry.alias}: drag to pan; 'Draw ROI' to select a region.")
+
+    def _capture_view_frac(self) -> tuple | None:
+        """Current thumbnail view as (fx0, fx1, fy0, fy1) fractions of the image
+        extent, or None if nothing is zoomable yet. Resolution-independent, so it
+        transfers across a reload at a different µm/px."""
+        if self.disp_rgb is None:
+            return None
+        try:
+            x0, x1 = self.thumb_ax.get_xlim()
+            y0, y1 = self.thumb_ax.get_ylim()
+        except Exception:
+            return None
+        h, w = self.disp_rgb.shape[:2]
+        if not w or not h:
+            return None
+        # imshow extent is [-0.5, dim-0.5]; map lims to [0, 1] across that extent.
+        return ((x0 + 0.5) / w, (x1 + 0.5) / w,
+                (y0 + 0.5) / h, (y1 + 0.5) / h)
+
+    def _restore_pending_view(self) -> None:
+        """Apply a view fraction captured before a resolution change to the freshly
+        loaded image, then clear it. No-op when nothing was carried."""
+        frac = self._pending_view_frac
+        self._pending_view_frac = None
+        if frac is None or self.disp_rgb is None:
+            return
+        fx0, fx1, fy0, fy1 = frac
+        h, w = self.disp_rgb.shape[:2]
+        try:
+            self.thumb_ax.set_xlim(fx0 * w - 0.5, fx1 * w - 0.5)
+            self.thumb_ax.set_ylim(fy0 * h - 0.5, fy1 * h - 0.5)
+            self.thumb_canvas.draw_idle()
+        except Exception:
+            pass
 
     def _set_draw_active(self, active: bool) -> None:
         """Activate/deactivate the ROI rectangle selector and reflect it on the sticky
