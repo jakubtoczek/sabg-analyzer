@@ -1097,6 +1097,11 @@ class PreviewWindow(tk.Toplevel):
         lines.append(f"fold {100*lay['fold'].mean():.1f}%  "
                      f"artifact {100*lay['artifact'].mean():.1f}%  "
                      f"edge-rej {100*lay['edge_removed'].mean():.1f}%")
+        dec = lay.get("deconv")
+        if dec is not None and sabg_px:         # intensity-weighted readout (A3.3)
+            od = dec[lay["sabg"]]
+            lines.append(f"mean OD {float(od.mean()):.4f}  "
+                         f"integrated OD {float(od.sum()):.1f}")
         self.stats_label.configure(text="\n".join(lines))
 
     def _overlay_order(self) -> list | None:

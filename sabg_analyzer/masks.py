@@ -100,8 +100,10 @@ def detect_sabg(rgb: np.ndarray, t: np.ndarray, opp: np.ndarray, cfg: Config,
             array via `_grow_connected` (preview path).
     Returns:
         {"sabg": pos, "edge_removed": removed, "hot": hot, "sabg_candidate":
-        candidate}. All are boolean masks; `sabg_candidate` is the pre-rejection
-        positive set (before fold-drop / edge removal).
+        candidate, "deconv": deconv}. The masks are boolean; `sabg_candidate` is
+        the pre-rejection positive set (before fold-drop / edge removal). `deconv`
+        is the float SABG-channel score, returned so callers can aggregate stain
+        intensity (integrated/mean OD) without recomputing it.
     """
     primary = cfg.detection.primary
     agree = cfg.detection.require_agreement
@@ -146,4 +148,4 @@ def detect_sabg(rgb: np.ndarray, t: np.ndarray, opp: np.ndarray, cfg: Config,
         pos = grown
 
     return {"sabg": pos, "edge_removed": removed, "hot": hot,
-            "sabg_candidate": candidate}
+            "sabg_candidate": candidate, "deconv": deconv}

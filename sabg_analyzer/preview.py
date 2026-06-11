@@ -233,6 +233,7 @@ def compute_roi_layers(rgb: np.ndarray, cfg: Config, pixel_size_um: float | None
         "fold": fold,
         "sabg": d["sabg"],
         "sabg_candidate": d["sabg_candidate"],   # pre-rejection positives (B1 audit layer)
+        "deconv": d["deconv"],                   # SABG-channel score (for the intensity readout)
         "edge_removed": d["edge_removed"],
         "nontissue": ~region_full,          # glass/background only (not the excluded region)
         "excluded": (exclude if exclude is not None
