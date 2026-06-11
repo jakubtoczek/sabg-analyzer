@@ -205,6 +205,8 @@ overlay:
   show_nontissue: true         # shade non-tissue so the tissue mask can be audited
   excluded_color: [255, 0, 255]  # RGB highlight for the manual exclusion mask (magenta)
   excluded_alpha: 0.55         # exclusion blend strength (0-1)
+  sabg_candidate_color: [0, 180, 180]  # pre-rejection SABG+ audit underlay (cyan)
+  sabg_candidate_alpha: 0.30   # candidate underlay blend strength (0-1)
 
 # ---- White balance (display/figures only; quantification uses raw pixels) --
 whitebalance:

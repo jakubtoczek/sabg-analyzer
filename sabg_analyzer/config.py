@@ -57,6 +57,8 @@ class OverlayParams:
     show_nontissue: bool = True                         # shade non-tissue to audit the mask
     excluded_color: tuple[int, int, int] = (255, 0, 255)  # manual exclusion mask (magenta)
     excluded_alpha: float = 0.55                        # exclusion blend strength
+    sabg_candidate_color: tuple[int, int, int] = (0, 180, 180)  # pre-rejection SABG+ (cyan)
+    sabg_candidate_alpha: float = 0.30                  # candidate underlay blend strength
 
 
 @dataclass
@@ -262,6 +264,10 @@ def load_config(path: str | Path | None) -> Config:
             cfg.overlay.excluded_color = tuple(ov["excluded_color"])
         if ov.get("excluded_alpha") is not None:
             cfg.overlay.excluded_alpha = float(ov["excluded_alpha"])
+        if "sabg_candidate_color" in ov:
+            cfg.overlay.sabg_candidate_color = tuple(ov["sabg_candidate_color"])
+        if ov.get("sabg_candidate_alpha") is not None:
+            cfg.overlay.sabg_candidate_alpha = float(ov["sabg_candidate_alpha"])
     if "whitebalance" in raw and raw["whitebalance"]:
         _update_dataclass(cfg.whitebalance, raw["whitebalance"])
     if "output" in raw and raw["output"]:

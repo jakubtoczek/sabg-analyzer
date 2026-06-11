@@ -197,8 +197,9 @@ def compute_roi_layers(rgb: np.ndarray, cfg: Config, pixel_size_um: float | None
 
     Returns a dict of boolean masks (all the same H×W as *rgb*) plus the thresholds:
     ``tissue`` (countable), ``region`` (full tissue blob), ``artifact``, ``fold``,
-    ``sabg``, ``edge_removed``, ``nontissue`` (glass only), ``excluded`` (the manual
-    exclusion mask), and ``thr`` / ``thr_s``.
+    ``sabg``, ``sabg_candidate`` (pre-rejection positives), ``edge_removed``,
+    ``nontissue`` (glass only), ``excluded`` (the manual exclusion mask), and
+    ``thr`` / ``thr_s``.
     The mask order matches `pipeline.analyze_scene` exactly (it calls the same
     `compute_region_masks` / `detect_sabg`), so what you tune here is what analysis does.
 
@@ -231,6 +232,7 @@ def compute_roi_layers(rgb: np.ndarray, cfg: Config, pixel_size_um: float | None
         "artifact": art,
         "fold": fold,
         "sabg": d["sabg"],
+        "sabg_candidate": d["sabg_candidate"],   # pre-rejection positives (B1 audit layer)
         "edge_removed": d["edge_removed"],
         "nontissue": ~region_full,          # glass/background only (not the excluded region)
         "excluded": (exclude if exclude is not None

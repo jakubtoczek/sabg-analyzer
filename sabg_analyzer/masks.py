@@ -99,7 +99,9 @@ def detect_sabg(rgb: np.ndarray, t: np.ndarray, opp: np.ndarray, cfg: Config,
             When None and hysteresis is on, the grow is computed directly on this
             array via `_grow_connected` (preview path).
     Returns:
-        {"sabg": pos, "edge_removed": removed, "hot": hot} (all boolean arrays).
+        {"sabg": pos, "edge_removed": removed, "hot": hot, "sabg_candidate":
+        candidate}. All are boolean masks; `sabg_candidate` is the pre-rejection
+        positive set (before fold-drop / edge removal).
     """
     primary = cfg.detection.primary
     agree = cfg.detection.require_agreement
@@ -120,6 +122,12 @@ def detect_sabg(rgb: np.ndarray, t: np.ndarray, opp: np.ndarray, cfg: Config,
         else:                                  # preview: real grow on this ROI
             pos = pos | _grow_connected(pos, cand)
 
+    # Pre-rejection candidate (B1 audit layer): the grown positives BEFORE the
+    # fold-drop / edge filter strip anything. The later expand step can grow the
+    # final mask beyond this, so `candidate` is not a strict superset of `sabg`;
+    # `candidate & ~sabg` is exactly what the fold/edge stages rejected.
+    candidate = pos.copy()
+
     if cfg.fold.enabled and not cfg.fold.exclude_from_tissue and fold is not None:
         pos = pos & ~fold                      # numerator-only: drop fold positives
 
@@ -137,4 +145,5 @@ def detect_sabg(rgb: np.ndarray, t: np.ndarray, opp: np.ndarray, cfg: Config,
             grown &= pos | (opp >= cfg.detection.expand_teal_min)
         pos = grown
 
-    return {"sabg": pos, "edge_removed": removed, "hot": hot}
+    return {"sabg": pos, "edge_removed": removed, "hot": hot,
+            "sabg_candidate": candidate}

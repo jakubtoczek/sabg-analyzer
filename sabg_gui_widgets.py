@@ -323,11 +323,13 @@ LAYER_SPEC = [
     ("excluded", "excluded_color", "excluded_alpha", True),
     ("artifact", "artifact_color", "artifact_alpha", True),
     ("fold", "fold_color", "fold_alpha", True),
+    ("sabg_candidate", "sabg_candidate_color", "sabg_candidate_alpha", False),
     ("sabg", "sabg_color", "sabg_alpha", True),
     ("edge_removed", "edge_color", "edge_alpha", True),
 ]
 LAYER_LABELS = {"nontissue": "non-tissue", "excluded": "excluded", "artifact": "artifact",
-                "fold": "fold", "sabg": "SABG+", "edge_removed": "edge-rejected"}
+                "fold": "fold", "sabg_candidate": "candidate SABG+", "sabg": "SABG+",
+                "edge_removed": "edge-rejected"}
 
 # The Layers *panel* lists 'excluded' above 'non-tissue' (Jakub's preference); this is
 # display order only. The overlay COMPOSITE order stays `LAYER_SPEC` (non-tissue first,
