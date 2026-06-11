@@ -61,3 +61,22 @@ pandas-union columns with NaN in the rows from the other mode.
 Verify: `compileall` OK; default `enabled=False`; snapshot block present; enable→dump→reload
 round-trips True; "Intensity quantification" registered in `OTHER_GROUPS`. Column on/off
 proven by the functional 77_Ctl run (see Verification).
+
+---
+
+## C — README rework  (commit 3)
+
+- Top "no counterstain" block: 11 lines → 5-line note (SABG-only X-Gal, teal-vs-unstained,
+  area fraction optionally intensity-weighted; points to **Notes** for the deconvolution
+  detail).
+- Install: added "Requires **Python 3.10+** with `pip`" before `pip install` (floor from
+  scikit-image≥0.22 / numpy≥1.24 / pandas≥2 / matplotlib≥3.7).
+- White balance: new **Notes** bullet — display/figure-only, never affects numbers; knobs
+  `whitebalance.bright_frac` / `target` (+ reserved `homogeneity_tol`).
+- Intensity columns: now flagged **optional** (`intensity.enabled`, off by default) with how
+  to enable + the stain-vector cross-ref; schema line moves the two OD columns out of the
+  always-present list into the "when `intensity.enabled`" note.
+- Overlay legend: "edge-shadow = blue" → "= violet" (matches the Part A recolour).
+
+Verify: grep confirms no stale "edge-shadow = blue"; Python-3.10 + intensity.enabled wording
+present.

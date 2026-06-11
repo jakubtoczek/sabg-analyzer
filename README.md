@@ -7,17 +7,11 @@ For each tissue section:
 
 > **% SABG⁺ area = SABG⁺ pixels / total tissue pixels × 100**
 
-> **Important — no counterstain.** These sections are stained for SA-β-Gal **only**
-> (X-Gal, a teal/cyan chromogen); there is **no nuclear or cytoplasmic counterstain**
-> (no eosin, no nuclear-fast-red, etc.). The tissue is therefore pale khaki in
-> brightfield and the *only* applied dye is the teal precipitate marking senescent
-> cells. This shapes the whole method: detection separates **teal X-Gal** from
-> **unstained tissue** — *not* from a second stain — so the colour-deconvolution's
-> second vector models the tissue's *intrinsic* brightfield colour rather than a real
-> counterstain, and "% SABG⁺" is teal area over total **unstained** tissue area.
-> A practical consequence: there is no nuclear stain to count cells or normalise by, so
-> the readout is a **stained-area fraction** (plus the optional intensity columns below),
-> not a per-cell or per-nucleus measure.
+> **No counterstain.** These sections are stained for SA-β-Gal **only** (X-Gal, a teal
+> chromogen) — no eosin or nuclear stain. Detection therefore separates teal X-Gal from
+> *unstained* khaki tissue (not from a second dye), and with no nuclei to count the readout
+> is a **stained-area fraction** (`% SABG⁺`), optionally weighted by stain intensity (see the
+> intensity columns below). The **Notes** explain how this shapes the colour deconvolution.
 
 ---
 
@@ -55,6 +49,8 @@ areas are reported in mm².
 ---
 
 ## Install
+
+Requires **Python 3.10+** with `pip` available.
 
 ```powershell
 cd C:\Code\SABG_analyzer\main
@@ -148,7 +144,7 @@ Produces (under `..\outputs`):
   (written after **every** section, so a Stop/crash keeps finished work)
 - `sections/<alias>_<variant>.jpg` — whole-section figures, including the QC overlay
   (SABG⁺ = green, dark fold/debris = red, linear-fold band = orange, edge-shadow =
-  blue, glass/background = grey). Variants are config-driven (see `export`).
+  violet, glass/background = grey). Variants are config-driven (see `export`).
 - `debug/<file>_s<idx>_compare.jpg` — 6-panel audit (overview, both scores,
   SABG⁺/artifact masks, overlay, tissue). Add `--full-debug` for the large
   standalone heatmaps too.
@@ -267,25 +263,28 @@ true signal better.
 
 ## Output columns (`results.csv`)
 
-`file, scene, key, alias, pct_sabg, sabg_integrated_od, sabg_mean_od, tissue_px,
-positive_px, artifact_px, fold_px, edge_px, tissue_area_mm2, sabg_area_mm2,
-artifact_area_mm2, fold_area_mm2, edge_area_mm2, threshold, threshold_secondary,
-threshold_method, require_agreement, primary, pixel_size_um, process_zoom`
-(+ `animal, group, tissue, treatment, day, tag` when metadata is joined).
+`file, scene, key, alias, pct_sabg, tissue_px, positive_px, artifact_px, fold_px, edge_px,
+tissue_area_mm2, sabg_area_mm2, artifact_area_mm2, fold_area_mm2, edge_area_mm2, threshold,
+threshold_secondary, threshold_method, require_agreement, primary, pixel_size_um,
+process_zoom` (+ `animal, group, tissue, treatment, day, tag` when metadata is joined; +
+the optional `sabg_integrated_od, sabg_mean_od` after `pct_sabg` when `intensity.enabled`,
+see below).
 `alias` is the short id used in filenames; `tissue_px` is *after* artifact/border (and,
 when `fold.enabled` with `exclude_from_tissue`, fold-band) exclusion, so
 `pct_sabg = positive_px / tissue_px`. `fold_px` / `edge_px` report the linear-fold band
 and edge-shadow rejection areas.
 
-**Intensity columns (area vs. amount).** `pct_sabg` measures stained *area* and discards
-how *strongly* each positive pixel is stained — but with a single graded chromogen and no
-counterstain, intensity is itself biologically meaningful. Two additive columns capture it
-from the colour-deconvolution SABG score:
+**Intensity columns (optional; area vs. amount).** `pct_sabg` measures stained *area* and
+discards how *strongly* each positive pixel is stained — but with a single graded chromogen
+and no counterstain, intensity is itself biologically meaningful. Set `intensity.enabled:
+true` (**off by default**, so area is the clean baseline) to add two columns from the
+colour-deconvolution SABG score:
 - `sabg_integrated_od` — total SABG-channel optical density **summed over the positive
   pixels** (∝ total teal amount); scales with both area and intensity.
 - `sabg_mean_od` — the **mean** SABG-channel OD per positive pixel (intensity alone,
   area-independent).
-Both are computed from the same pixels as `pct_sabg`; they do **not** change `pct_sabg`. A
+Both are computed from the same pixels as `pct_sabg` and do **not** change it; the OD value
+follows the same stain vectors as detection (`detection.stain_matrix` / `auto_estimate`). A
 control section reads a low `sabg_mean_od` (faint false-positive floor); a strongly stained
 section reads higher.
 
@@ -299,6 +298,11 @@ section reads higher.
   tissue* colour, not an applied dye.
 - The overlay marks an overview pixel positive if *any* full-res positive falls in it, so
   punctate signal stays visible; the reported `%` always uses exact full-res counts.
+- **White balance is display-only.** The slides have a yellowish glass background; the `_wb`
+  figure variants neutralise it to near-white for publication. **Quantification always runs
+  on raw pixels**, so white balance never changes any number. Tune `whitebalance.bright_frac`
+  (fraction of the brightest pixels averaged as the white point) and `whitebalance.target`
+  (the near-white value it maps to); `homogeneity_tol` is reserved.
 - **Candidate (pre-rejection) layer.** The interactive **Preview** can show a
   `candidate SABG⁺` layer — the positives *before* the fold/edge rejection stages strip
   them — so you can see exactly what each rejection removes (`candidate` minus the final
