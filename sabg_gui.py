@@ -36,6 +36,8 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
 
+from sabg_analyzer import __version__   # cheap: package __init__ only defines the version
+
 MAIN_DIR = Path(__file__).resolve().parent          # contains the sabg_analyzer package
 DEFAULT_DATA = (MAIN_DIR.parent / "data").resolve()
 DEFAULT_OUT = (MAIN_DIR.parent / "outputs").resolve()
@@ -81,7 +83,7 @@ class App:
         self._proc = None                # the running CLI subprocess (for Stop)
         self._stopped = False            # a run was stopped -> offer Resume even if
                                          # no section finished yet (nothing checkpointed)
-        root.title("SABG Analyzer")
+        root.title(f"SABG Analyzer {__version__}")
         root.geometry("880x580")
         root.minsize(740, 470)
 
@@ -134,6 +136,8 @@ class App:
         b.pack(side="left", padx=3, pady=4)
         self.btn["StopResume"] = b
 
+        tk.Label(right, text=f"v{__version__}", fg="#888",
+                 font=("Consolas", 8)).pack(side="left", padx=(0, 6))
         for name, cmd in (("Help", self.on_help), ("Config", self.on_config)):
             b = tk.Button(right, text=name, width=9, command=cmd)
             b.pack(side="left", padx=3, pady=4)

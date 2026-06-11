@@ -13,6 +13,7 @@ import sys
 import time
 from pathlib import Path
 
+from . import __version__
 from .config import load_config
 from .metadata import load_metadata
 from .progress import LIVE
@@ -89,6 +90,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="sabg_analyzer",
         description="Quantify SA-beta-Gal positive area in brightfield CZI WSIs.",
     )
+    parser.add_argument("--version", action="version",
+                        version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     s = sub.add_parser("scan", help="detect sections, extract labels, write metadata template")

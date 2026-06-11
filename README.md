@@ -3,6 +3,8 @@
 Quantify **SA-β-Gal (SABG) positive area** in brightfield CZI whole-slide images of
 murine A549 tumor tissue (untreated vs. senescence-inducing treatment at 3 / 7 days).
 
+_Version & history: [`CHANGELOG.md`](CHANGELOG.md) — Semantic Versioning, pre-1.0 (beta)._
+
 For each tissue section:
 
 > **% SABG⁺ area = SABG⁺ pixels / total tissue pixels × 100**

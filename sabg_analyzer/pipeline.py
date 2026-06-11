@@ -27,6 +27,7 @@ import pandas as pd
 import yaml
 from pylibCZIrw import czi as pyczi
 
+from . import __version__
 from . import czi_io, edge as edge_filter, overlay, scoring
 from .config import Config
 from .czi_io import SceneInfo
@@ -469,6 +470,7 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
         "require_agreement": agree,
         "primary": cfg.detection.primary,
         "pixel_size_um": scene.pixel_size_um, "process_zoom": z,
+        "analyzer_version": __version__,
     })
     return row
 
@@ -492,6 +494,7 @@ def _empty_row(scene: SceneInfo, cfg: Config, alias: str | None = None) -> dict:
         "require_agreement": cfg.detection.require_agreement,
         "primary": cfg.detection.primary,
         "pixel_size_um": scene.pixel_size_um, "process_zoom": cfg.process_zoom,
+        "analyzer_version": __version__,
     })
     return row
 
