@@ -41,6 +41,17 @@ class DetectionParams:
 
 
 @dataclass
+class IntensityParams:
+    """Optional intensity (optical-density) quantification. %SABG by *area* is always
+    reported; when enabled, two extra results.csv columns capture stain *amount* from the
+    colour-deconvolution SABG score over the final positives: ``sabg_integrated_od`` (the
+    OD summed over positives -- area weighted by intensity) and ``sabg_mean_od`` (the mean
+    OD per positive pixel -- intensity alone). The OD value itself follows the existing
+    stain vectors (``detection.stain_matrix`` / ``auto_estimate``)."""
+    enabled: bool = False   # off by default: %SABG-area is the clean baseline output
+
+
+@dataclass
 class OverlayParams:
     sabg_color: tuple[int, int, int] = (0, 200, 0)      # SABG+ highlight (green)
     sabg_alpha: float = 0.60                            # SABG+ blend strength
@@ -153,6 +164,7 @@ class Config:
     edge: EdgeFilterParams = field(default_factory=EdgeFilterParams)
     detection: DetectionParams = field(default_factory=DetectionParams)
     threshold: ThresholdParams = field(default_factory=ThresholdParams)
+    intensity: IntensityParams = field(default_factory=IntensityParams)
     overlay: OverlayParams = field(default_factory=OverlayParams)
     whitebalance: WhiteBalanceParams = field(default_factory=WhiteBalanceParams)
     output: OutputParams = field(default_factory=OutputParams)
@@ -226,6 +238,8 @@ def load_config(path: str | Path | None) -> Config:
         _update_dataclass(cfg.detection, raw["detection"])
     if "threshold" in raw and raw["threshold"]:
         _update_dataclass(cfg.threshold, raw["threshold"])
+    if "intensity" in raw and raw["intensity"]:
+        _update_dataclass(cfg.intensity, raw["intensity"])
     if "overlay" in raw and raw["overlay"]:
         ov = raw["overlay"]
         if "sabg_color" in ov:

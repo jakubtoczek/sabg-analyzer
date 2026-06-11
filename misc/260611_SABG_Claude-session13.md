@@ -33,3 +33,31 @@ magenta stays visible) — same as before.
 
 Verify: `compileall` OK; `LAYER_SPEC`/panel orders + `edge_color=(138,43,226)`/`alpha=0.6`
 printed as expected.
+
+---
+
+## B — Optional, tunable intensity (OD) quantification, default OFF  (commit 2)
+
+The A3.3 intensity columns were always-on. Now gated by a config toggle, **off by default**
+(area-only is the clean baseline). "OD-weighted" = integrated OD (area x intensity).
+
+**Changes**
+- `config.py`: new `IntensityParams(enabled=False)` dataclass; `Config.intensity` field
+  (after `threshold`); `load_config` parses an `intensity:` block (explicit-section loader).
+- `pipeline.py` `analyze_scene`: `od_sum` accumulation gated on `cfg.intensity.enabled`
+  (perf win when off); `sabg_integrated_od`/`sabg_mean_od` keys inserted into the row
+  **only when enabled** (right after `pct_sabg`). Same gating in `_empty_row`. results.csv
+  columns come from `pd.DataFrame(rows)` dict keys, so omitting keys omits columns — no
+  fieldname plumbing. `_build_config_snapshot` emits `"intensity": {"enabled": ...}` so the
+  analyze snapshot + GUI Save round-trip it.
+- `sabg_gui_widgets.py`: `INTENSITY_FIELDS` + an "Intensity quantification" group in
+  `OTHER_GROUPS` (Config window → "Other settings" tab, between Output artifacts and White
+  balance). Bool → checkbox via existing `build_groups`.
+- `config.example.yaml`: documented `intensity:` block (`enabled: false`).
+
+Edge case (acceptable): a `--continue` resume mixing enabled/disabled runs yields
+pandas-union columns with NaN in the rows from the other mode.
+
+Verify: `compileall` OK; default `enabled=False`; snapshot block present; enable→dump→reload
+round-trips True; "Intensity quantification" registered in `OTHER_GROUPS`. Column on/off
+proven by the functional 77_Ctl run (see Verification).

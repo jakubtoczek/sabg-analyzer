@@ -451,6 +451,11 @@ OUTPUT_FIELDS = [
     ("output", "run_log", "bool", "run_log", "Tee the console output to a timestamped log file."),
     ("output", "run_log_name", "str", "run_log_name", "strftime template for the run-log filename."),
 ]
+INTENSITY_FIELDS = [
+    ("intensity", "enabled", "bool", "enabled",
+     "Optional: also write the OD-weighted intensity columns (sabg_integrated_od, "
+     "sabg_mean_od) to results.csv. Off = %SABG by area only; this never changes %SABG."),
+]
 PROGRESS_FIELDS = [
     ("progress", "section", "bool", "section", "Show per-section progress."),
     ("progress", "total", "bool", "total", "Show overall progress."),
@@ -479,6 +484,9 @@ OTHER_GROUPS = [
     ("Canvas sizing", SIZING_FIELDS,
      "How big each working canvas is (µm/px, proportional to physical size, with px caps)."),
     ("Output artifacts", OUTPUT_FIELDS, "Which files analyze/export write."),
+    ("Intensity quantification", INTENSITY_FIELDS,
+     "Optional OD-weighted intensity columns in results.csv (stain amount); "
+     "%SABG by area is unaffected."),
     ("White balance", WHITEBALANCE_FIELDS,
      "Display/figure white balance (quantification always uses raw pixels)."),
     ("Progress", PROGRESS_FIELDS, "What the progress reporter prints."),

@@ -188,6 +188,16 @@ threshold:
   # is thinner when downsampled), so it's off by default; turn on for quick looks.
   from_overview: false
 
+# ---- Intensity (OD-weighted) quantification -------------------------------
+# %SABG by AREA is always reported. Enable this to ALSO write two intensity
+# columns to results.csv, capturing stain AMOUNT from the deconvolution SABG
+# score over the final positives (the OD value follows detection.stain_matrix):
+#   sabg_integrated_od  total OD summed over positives (area x intensity)
+#   sabg_mean_od        mean OD per positive pixel (intensity alone)
+# This never changes %SABG. Off by default (area-only is the clean baseline).
+intensity:
+  enabled: false
+
 # ---- Overlay / QC appearance ----------------------------------------------
 overlay:
   sabg_color: [0, 200, 0]      # RGB highlight for SABG+ pixels (green)

@@ -370,7 +370,8 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
             tissue_px += int(t.sum())
             positive_px += int(pos.sum())
             if pos.any():
-                od_sum += float(d["deconv"][pos].sum())   # integrated stain intensity
+                if cfg.intensity.enabled:
+                    od_sum += float(d["deconv"][pos].sum())   # integrated stain intensity
                 _project(ov_pos, pos, ox, oy, tw, th, scale)
                 _project(hd_pos, pos, ox, oy, tw, th, hd_scale)
         if want_fold_pos and fold_hot:
@@ -382,12 +383,6 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
                 _project(hd_pos_fold, pos_fold, ox, oy, tw, th, hd_scale)
 
     pct = 100.0 * positive_px / tissue_px if tissue_px else 0.0
-    # Intensity-weighted output (A3.3): senescence stain is graded, not binary.
-    # `sabg_integrated_od` is the total SABG-channel optical density summed over the
-    # final positives (proportional to total stain amount); `sabg_mean_od` is the
-    # mean OD per positive pixel. Both are additive; %SABG (by area) is unchanged.
-    sabg_integrated_od = od_sum
-    sabg_mean_od = (od_sum / positive_px) if positive_px else 0.0
 
     # --- areas in mm^2 (processed-pixel size) -----------------------------
     px_um = (scene.pixel_size_um / z) if scene.pixel_size_um else None
@@ -451,12 +446,18 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
     if cfg.output.log_files:
         overlay.log_written(out_dir, written)
 
-    return {
+    row = {
         "file": scene.file_stem, "scene": scene.scene_index, "key": scene.key,
         "alias": alias,
         "pct_sabg": round(pct, 4),
-        "sabg_integrated_od": round(sabg_integrated_od, 4),
-        "sabg_mean_od": round(sabg_mean_od, 6),
+    }
+    if cfg.intensity.enabled:
+        # Optional intensity (OD-weighted) columns: total SABG-channel optical density
+        # summed over the final positives (area x intensity) + the mean OD per positive
+        # pixel (intensity alone). %SABG (by area) above is unchanged.
+        row["sabg_integrated_od"] = round(od_sum, 4)
+        row["sabg_mean_od"] = round((od_sum / positive_px) if positive_px else 0.0, 6)
+    row.update({
         "tissue_px": tissue_px, "positive_px": positive_px,
         "artifact_px": artifact_px, "fold_px": fold_px, "edge_px": edge_px,
         "tissue_area_mm2": tissue_mm2, "sabg_area_mm2": sabg_mm2,
@@ -468,14 +469,20 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
         "require_agreement": agree,
         "primary": cfg.detection.primary,
         "pixel_size_um": scene.pixel_size_um, "process_zoom": z,
-    }
+    })
+    return row
 
 
 def _empty_row(scene: SceneInfo, cfg: Config, alias: str | None = None) -> dict:
-    return {
+    row = {
         "file": scene.file_stem, "scene": scene.scene_index, "key": scene.key,
         "alias": alias or scene.slug,
-        "pct_sabg": 0.0, "sabg_integrated_od": 0.0, "sabg_mean_od": 0.0,
+        "pct_sabg": 0.0,
+    }
+    if cfg.intensity.enabled:
+        row["sabg_integrated_od"] = 0.0
+        row["sabg_mean_od"] = 0.0
+    row.update({
         "tissue_px": 0, "positive_px": 0,
         "artifact_px": 0, "fold_px": 0, "edge_px": 0,
         "tissue_area_mm2": 0.0, "sabg_area_mm2": 0.0,
@@ -485,7 +492,8 @@ def _empty_row(scene: SceneInfo, cfg: Config, alias: str | None = None) -> dict:
         "require_agreement": cfg.detection.require_agreement,
         "primary": cfg.detection.primary,
         "pixel_size_um": scene.pixel_size_um, "process_zoom": cfg.process_zoom,
-    }
+    })
+    return row
 
 
 # ---------------------------------------------------------------------------
@@ -783,6 +791,7 @@ def _build_config_snapshot(cfg: Config, rows: list[dict]) -> dict:
                       "min_score": cfg.threshold.min_score,
                       "scale": cfg.threshold.scale,
                       "from_overview": cfg.threshold.from_overview},
+        "intensity": {"enabled": cfg.intensity.enabled},
         "overlay": {"sabg_color": list(cfg.overlay.sabg_color),
                     "sabg_alpha": cfg.overlay.sabg_alpha,
                     "artifact_color": list(cfg.overlay.artifact_color),
