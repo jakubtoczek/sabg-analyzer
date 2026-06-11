@@ -705,15 +705,25 @@ def _add_composite_slider(parent, knobs, field_vars: dict, reject: bool = False)
         sv.set(value_to_slider(p_v0, p_v100, cur))
         guard["on"] = False
 
-    verb = "reject" if reject else "detect"
-    tip = ("Drives " + ", ".join(k[4] for k in knobs)
-           + f" together (left = {verb} less, right = {verb} more).")
-    tk.Label(parent, text=f"{verb} less", fg="#888", font=("Segoe UI", 7)).grid(
+    # End labels read in terms of the SABG⁺ OUTCOME (not the raw parameter value), so
+    # every stage agrees: right = more SABG⁺ survives for detection, right = more
+    # rejected for the reject stages (D6).
+    knob_list = ", ".join(k[4] for k in knobs)
+    if reject:
+        left_txt, right_txt = "← keep more", "reject more →"
+        tip = (f"Drives {knob_list} together. Right rejects MORE SABG⁺ positives "
+               "(left keeps more) — the slider follows the SABG⁺ outcome, not the raw "
+               "parameter value.")
+    else:
+        left_txt, right_txt = "← fewer SABG⁺", "more SABG⁺ →"
+        tip = (f"Drives {knob_list} together. Left = FEWER SABG⁺ positives, right = more "
+               "— the slider follows the SABG⁺ outcome, not the raw parameter value.")
+    tk.Label(parent, text=left_txt, fg="#888", font=("Segoe UI", 7)).grid(
         row=0, column=0, sticky="e")
     scale = ttk.Scale(parent, from_=0, to=100, variable=sv, command=from_slider,
                       length=150)
     scale.grid(row=0, column=1, sticky="ew", padx=3)
-    tk.Label(parent, text=f"{verb} more", fg="#888", font=("Segoe UI", 7)).grid(
+    tk.Label(parent, text=right_txt, fg="#888", font=("Segoe UI", 7)).grid(
         row=0, column=2, sticky="w")
     lbl = tk.Label(parent, text="strength" if reject else "sensitivity",
                    anchor="w", font=("Segoe UI", 8, "bold"))
