@@ -20,7 +20,22 @@ smoke/regression test, finalized docs, and a successful run by a second user.
 
 ## [Unreleased] — 0.4.0
 
-_(Session-16 feature items land here as they ship.)_
+Session 16.
+
+### Added
+- **Result staleness indicator** (Preview tuning panel): a provenance line under the Result
+  shows which section + ROI the numbers came from and flips amber ("view changed — recompute")
+  once the section or ROI moves on.
+- **Configurable default layer visibility** (`gui.layer_defaults`): the Layers panel now starts
+  candidate-on / SABG-off by default so the pre-rejection teal is what you audit first.
+- **Configurable default slide-label rotation** (`gui.label_rotate_quarter_turns`, default 90°
+  CCW): labels are scanned sideways, so the Info viewer starts them upright.
+
+### Changed
+- **Selectable Info text:** the Info viewer title and the file/scene table cells are now
+  copy-selectable (read-only entries), appearance unchanged.
+- **Compact tuning panel:** tightened per-stage and panel spacing so the detection sliders fit
+  without scrolling; candidate overlay alpha default raised 0.30 → 0.45 (now a default-on layer).
 
 ## [0.3.0] — 2026-06-12
 
