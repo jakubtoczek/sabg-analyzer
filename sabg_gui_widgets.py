@@ -731,10 +731,8 @@ def _add_composite_slider(parent, knobs, field_vars: dict, reject: bool = False)
     scale.grid(row=0, column=1, sticky="ew", padx=3)
     tk.Label(parent, text=right_txt, fg="#888", font=("Segoe UI", 7)).grid(
         row=0, column=2, sticky="w")
-    lbl = tk.Label(parent, text="strength" if reject else "sensitivity",
-                   anchor="w", font=("Segoe UI", 8, "bold"))
-    lbl.grid(row=1, column=0, columnspan=3, sticky="w")
-    Tooltip(lbl, tip)
+    # The "sensitivity"/"strength" sub-label was dropped (G2 compact-panel): it added a
+    # whole row per stage for no information the end-labels + tooltip don't already give.
     Tooltip(scale, tip)                  # hover help on the slider itself (B4)
     parent.columnconfigure(1, weight=1)
     if primary_var is not None:
