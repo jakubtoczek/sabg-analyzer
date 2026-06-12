@@ -798,8 +798,8 @@ def build_detection_sections(parent, cfg, field_vars: dict, on_change: Callable,
     section_extra = section_extra or {}
     out = []
     for title, fields, desc in DETECTION_GROUPS:
-        sec = tk.LabelFrame(parent, text=title, padx=4, pady=3)
-        sec.pack(fill="x", expand=True, pady=3)
+        sec = tk.LabelFrame(parent, text=title, padx=3, pady=2)
+        sec.pack(fill="x", expand=True, pady=2)
         # header row: per-stage "Reset" restoring this stage's displayed fields to the
         # program defaults (packed first so it sits at the stage's top-right).
         hdr = tk.Frame(sec)
@@ -825,14 +825,14 @@ def build_detection_sections(parent, cfg, field_vars: dict, on_change: Callable,
             knobs = _SLIDER_KNOBS_BY_LABEL.get(slabel)
             if knobs:
                 srow = tk.Frame(sec, padx=2)
-                srow.pack(fill="x", pady=(2, 0))
+                srow.pack(fill="x", pady=(1, 0))
                 _add_composite_slider(srow, knobs, field_vars,
                                       reject=slabel in REJECT_SLIDER_LABELS)
         if title in section_extra:
             ex = tk.Frame(sec, padx=2)
-            ex.pack(fill="x", pady=(2, 0))
+            ex.pack(fill="x", pady=(1, 0))
             section_extra[title](ex)
-        det.pack(fill="x", pady=(2, 0))
+        det.pack(fill="x", pady=(1, 0))
         out.append((sec, det))
     return out
 

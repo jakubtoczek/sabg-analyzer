@@ -668,7 +668,7 @@ class PreviewWindow(tk.Toplevel):
         body = sf.interior
 
         # top controls -- row 1: Recompute + auto + dirty dot; row 2: Export → config.
-        top = tk.Frame(body, padx=6, pady=6)
+        top = tk.Frame(body, padx=6, pady=4)
         top.pack(fill="x")
         row1 = tk.Frame(top)
         row1.pack(fill="x")
@@ -686,7 +686,7 @@ class PreviewWindow(tk.Toplevel):
         tk.Button(row2, text="Export → config", command=self.on_export).pack(side="left")
 
         # result characteristics (filled after each recompute / whole-section run)
-        res = tk.LabelFrame(body, text="Result", padx=6, pady=4)
+        res = tk.LabelFrame(body, text="Result", padx=6, pady=2)
         res.pack(fill="x", padx=6, pady=2)
         self.stats_label = tk.Label(res, text="(recompute to see %SABG, thresholds, areas)",
                                     anchor="w", justify="left", font=("Consolas", 9),
@@ -695,10 +695,10 @@ class PreviewWindow(tk.Toplevel):
 
         # whole-section compute (real analyze_scene; heavy) -> caches + section stats
         tk.Button(body, text="▣  Compute whole section…",
-                  command=self.on_compute_section).pack(fill="x", padx=6, pady=(2, 4))
+                  command=self.on_compute_section).pack(fill="x", padx=6, pady=(1, 2))
 
         # layers panel (show / colour / alpha per layer); enabled on the ROI tab only
-        lay = tk.LabelFrame(body, text="Layers (ROI overlay)", padx=6, pady=4)
+        lay = tk.LabelFrame(body, text="Layers (ROI overlay)", padx=6, pady=2)
         lay.pack(fill="x", padx=6, pady=2)
         self._layers_frame = lay
         gw.build_layers_panel(lay, self.cfg, self.show_vars, self._redraw)
