@@ -220,7 +220,9 @@ class InfoWindow(tk.Toplevel):
         entry = self.entries[self.cur_idx]
         if self._picker is not None:
             self._picker.highlight(entry)             # mark the current section in the list
-        self._rot = {"label": 0, "thumb": 0}
+        # labels are scanned sideways: start them at the configured CCW quarter-turn
+        # (default 1 = upright); the rotate buttons still compose on top of this.
+        self._rot = {"label": int(self.cfg.gui.label_rotate_quarter_turns) % 4, "thumb": 0}
         self.view_title.configure(
             text=f"{entry.alias}   [{self.cur_idx + 1}/{len(self.entries)}]")
         self._raw["label"] = _read_rgb(self._label_path(entry))

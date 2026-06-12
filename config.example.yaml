@@ -262,6 +262,9 @@ gui:
   # you list override LAYER_SPEC's per-layer default; unlisted layers keep their default.
   # Default flips to candidate-on / SABG-off (audit the pre-rejection teal first).
   layer_defaults: {sabg_candidate: true, sabg: false}
+  # Info viewer: default slide-label rotation in 90° CCW quarter-turns (0-3). Labels are
+  # scanned sideways, so 1 = upright by default; set 0 to disable. Rotate buttons compose.
+  label_rotate_quarter_turns: 1
 
 # ---- Section alias (used in results.csv + every output filename) ----------
 # Each section gets a short, human-readable id built from the sections.csv

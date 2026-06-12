@@ -128,6 +128,10 @@ class GuiParams:
     # candidate-on / SABG-off so the pre-rejection teal is what you see first.
     layer_defaults: dict[str, bool] = field(
         default_factory=lambda: {"sabg_candidate": True, "sabg": False})
+    # Info viewer: default rotation of the slide-label image, in 90° counter-clockwise
+    # quarter-turns (0-3). Labels are scanned sideways, so 1 = upright by default; the
+    # in-viewer rotate buttons still compose on top of this and reset per section.
+    label_rotate_quarter_turns: int = 1
 
 
 @dataclass
