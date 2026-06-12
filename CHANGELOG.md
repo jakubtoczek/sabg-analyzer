@@ -18,14 +18,49 @@ minor; the git tag (`vX.Y.Z`) marks when that minor is blessed.
 A move to **1.0.0** requires: config schema frozen, GUI/UX settled, a minimal
 smoke/regression test, finalized docs, and a successful run by a second user.
 
-## [Unreleased] — 0.2.0
+## [Unreleased] — 0.4.0
+
+_(Session-16 feature items land here as they ship.)_
+
+## [0.3.0] — 2026-06-12
+
+Session 15.
+
+### Added
+- **Per-section ROI + view memory.** The Preview remembers each section's ROI rectangle and
+  zoom/pan; a remembered rect shows as a dashed outline and Draw ROI edits it (Clear ROI forgets
+  it).
+- **Optional `sabg_od_per_tissue` intensity column** (D3): mean OD accumulated over tissue
+  pixels, off by default (needs intensity `enabled`). Clearer per-metric tooltips.
+
+### Changed
+- **Section list:** focus the current button so Up/Down arrow navigation works in both the
+  Preview and Info pickers.
+- **Compact sliders (step 1):** dropped the per-slider sensitivity/strength sub-label from the
+  detection tuning panel; end-labels and the slider tooltip already convey it.
+
+### Fixed
+- Grey out the section-list **"%SABG ↓"** order until a `results.csv` exists to sort by.
+
+## [0.2.0] — 2026-06-11
+
+Session 14.
 
 ### Added
 - **Versioning.** Single-source `__version__`, `sabg_analyzer --version` flag, version in the
-  GUI title and a `v0.2.0` label in the button row, `analyzer_version` column in `results.csv`,
+  GUI title and a `v…` label in the button row, `analyzer_version` column in `results.csv`,
   and this changelog.
+- **Section-list ordering** (Preview + Info): a current-section marker, arrow-key navigation,
+  and selectable order modes — **Scan order** (default), **Alias A–Z**, **%SABG ↓**.
+- **Unsaved-state warnings:** warn before discarding an unsaved exclusion mask or unsaved
+  config changes (section switch / window close).
 
-_(Session-14 feature items land here as they ship.)_
+### Changed
+- **Sticky Draw ROI** now edits the pending rectangle instead of erasing it.
+- **Preserve the viewed area across a resolution change** (zoom/pan captured as image-fractions
+  and re-applied after reload).
+- **D6 slider end-labels** read in SABG⁺ outcome terms (`← fewer SABG⁺ / more SABG⁺ →` for
+  detection, `← keep more / reject more →` for rejection) with clarifying tooltips.
 
 ## [0.1.0] — 2026-06-11
 
@@ -53,5 +88,7 @@ Baseline: the pushed session-13 state. Summarizes development through sessions 8
 - Single-user local tool: run from `C:\Code\SABG_analyzer\main` with sibling `..\data` /
   `..\outputs`. Not yet pip-installable; no automated tests.
 
-[Unreleased]: https://github.com/jakubtoczek/sabg-analyzer/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/jakubtoczek/sabg-analyzer/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/jakubtoczek/sabg-analyzer/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/jakubtoczek/sabg-analyzer/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jakubtoczek/sabg-analyzer/releases/tag/v0.1.0
