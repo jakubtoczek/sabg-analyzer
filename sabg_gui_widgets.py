@@ -1012,6 +1012,15 @@ class _PickerHandle:
                                 else ("Segoe UI", 7))
             except Exception:
                 pass
+        # Park keyboard focus on the current section's button so the <Up>/<Down>
+        # bindings (attached per-button) actually fire; focus then follows the
+        # selection on click, arrow-step, and initial build.
+        rec = self.cells.get(id(entry))
+        if rec is not None and rec[2] is not None:
+            try:
+                rec[2].focus_set()
+            except Exception:
+                pass
         self._scroll_to(entry)
 
     def _scroll_to(self, entry) -> None:
