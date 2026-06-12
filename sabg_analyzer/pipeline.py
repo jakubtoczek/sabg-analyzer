@@ -328,6 +328,7 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
     tissue_px = 0
     positive_px = 0
     od_sum = 0.0          # integrated SABG-channel OD over the final positives (A3.3)
+    od_tissue_sum = 0.0   # integrated SABG-channel OD over ALL tissue px (D3, per_tissue)
     artifact_px = 0
     fold_px = 0
     edge_px = 0
@@ -370,6 +371,8 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
                 _project(hd_edge, removed, ox, oy, tw, th, hd_scale)
             tissue_px += int(t.sum())
             positive_px += int(pos.sum())
+            if cfg.intensity.enabled and cfg.intensity.per_tissue:
+                od_tissue_sum += float(d["deconv"][t].sum())  # OD over all tissue (D3)
             if pos.any():
                 if cfg.intensity.enabled:
                     od_sum += float(d["deconv"][pos].sum())   # integrated stain intensity
@@ -458,6 +461,10 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
         # pixel (intensity alone). %SABG (by area) above is unchanged.
         row["sabg_integrated_od"] = round(od_sum, 4)
         row["sabg_mean_od"] = round((od_sum / positive_px) if positive_px else 0.0, 6)
+        if cfg.intensity.per_tissue:
+            # OD summed over all tissue px / tissue px: an intensity-weighted %SABG analogue.
+            row["sabg_od_per_tissue"] = round(
+                (od_tissue_sum / tissue_px) if tissue_px else 0.0, 6)
     row.update({
         "tissue_px": tissue_px, "positive_px": positive_px,
         "artifact_px": artifact_px, "fold_px": fold_px, "edge_px": edge_px,
@@ -484,6 +491,8 @@ def _empty_row(scene: SceneInfo, cfg: Config, alias: str | None = None) -> dict:
     if cfg.intensity.enabled:
         row["sabg_integrated_od"] = 0.0
         row["sabg_mean_od"] = 0.0
+        if cfg.intensity.per_tissue:
+            row["sabg_od_per_tissue"] = 0.0
     row.update({
         "tissue_px": 0, "positive_px": 0,
         "artifact_px": 0, "fold_px": 0, "edge_px": 0,
@@ -794,7 +803,8 @@ def _build_config_snapshot(cfg: Config, rows: list[dict]) -> dict:
                       "min_score": cfg.threshold.min_score,
                       "scale": cfg.threshold.scale,
                       "from_overview": cfg.threshold.from_overview},
-        "intensity": {"enabled": cfg.intensity.enabled},
+        "intensity": {"enabled": cfg.intensity.enabled,
+                      "per_tissue": cfg.intensity.per_tissue},
         "overlay": {"sabg_color": list(cfg.overlay.sabg_color),
                     "sabg_alpha": cfg.overlay.sabg_alpha,
                     "artifact_color": list(cfg.overlay.artifact_color),

@@ -46,9 +46,13 @@ class IntensityParams:
     reported; when enabled, two extra results.csv columns capture stain *amount* from the
     colour-deconvolution SABG score over the final positives: ``sabg_integrated_od`` (the
     OD summed over positives -- area weighted by intensity) and ``sabg_mean_od`` (the mean
-    OD per positive pixel -- intensity alone). The OD value itself follows the existing
-    stain vectors (``detection.stain_matrix`` / ``auto_estimate``)."""
+    OD per positive pixel -- intensity alone). With ``per_tissue`` also on, a third column
+    ``sabg_od_per_tissue`` reports the OD summed over *all tissue* px divided by tissue px
+    (an intensity-weighted analogue of %SABG: stain amount normalised to tissue, not just
+    positives). The OD value itself follows the existing stain vectors
+    (``detection.stain_matrix`` / ``auto_estimate``)."""
     enabled: bool = False   # off by default: %SABG-area is the clean baseline output
+    per_tissue: bool = False   # also write sabg_od_per_tissue (needs `enabled`)
 
 
 @dataclass

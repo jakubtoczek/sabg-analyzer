@@ -453,8 +453,14 @@ OUTPUT_FIELDS = [
 ]
 INTENSITY_FIELDS = [
     ("intensity", "enabled", "bool", "enabled",
-     "Optional: also write the OD-weighted intensity columns (sabg_integrated_od, "
-     "sabg_mean_od) to results.csv. Off = %SABG by area only; this never changes %SABG."),
+     "Write OD-weighted intensity columns to results.csv (stain amount, not just area):\n"
+     "• sabg_integrated_od = Σ OD over positives (area × intensity)\n"
+     "• sabg_mean_od = mean OD per positive pixel (intensity alone)\n"
+     "Off = %SABG by area only. This never changes %SABG."),
+    ("intensity", "per_tissue", "bool", "per-tissue OD",
+     "Also write sabg_od_per_tissue = Σ OD over all tissue px ÷ tissue px — an "
+     "intensity-weighted analogue of %SABG (stain amount normalised to tissue, not just "
+     "positives). Requires 'enabled'; has no effect on its own."),
 ]
 PROGRESS_FIELDS = [
     ("progress", "section", "bool", "section", "Show per-section progress."),
@@ -485,8 +491,8 @@ OTHER_GROUPS = [
      "How big each working canvas is (µm/px, proportional to physical size, with px caps)."),
     ("Output artifacts", OUTPUT_FIELDS, "Which files analyze/export write."),
     ("Intensity quantification", INTENSITY_FIELDS,
-     "Optional OD-weighted intensity columns in results.csv (stain amount); "
-     "%SABG by area is unaffected."),
+     "Optional OD-weighted intensity columns in results.csv (stain amount): "
+     "integrated/mean OD over positives, plus per-tissue OD. %SABG by area is unaffected."),
     ("White balance", WHITEBALANCE_FIELDS,
      "Display/figure white balance (quantification always uses raw pixels)."),
     ("Progress", PROGRESS_FIELDS, "What the progress reporter prints."),
