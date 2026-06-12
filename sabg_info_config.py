@@ -42,6 +42,35 @@ def _read_rgb(path) -> np.ndarray | None:
     return None if bgr is None else cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
 
+def _selectable(parent, text: str = "", **kw) -> tk.Entry:
+    """A read-only Entry styled to read like a Label but with copy-selectable text.
+
+    Flat, borderless and background-matched to *parent* so it looks like a label; the
+    width tracks the content so it lays out like one. Update via `_set_selectable`."""
+    e = tk.Entry(parent, relief="flat", borderwidth=0, highlightthickness=0,
+                 readonlybackground=parent.cget("background"),
+                 width=max(1, len(text)), **kw)
+    e.insert(0, text)
+    e.configure(state="readonly")
+    return e
+
+
+def _set_selectable(entry: tk.Entry, text: str) -> None:
+    """Replace the text of a `_selectable` read-only Entry and resize it to fit."""
+    entry.configure(state="normal")
+    entry.delete(0, "end")
+    entry.insert(0, text)
+    entry.configure(state="readonly", width=max(1, len(text)))
+
+
+def _flash_bg(w, color: str, restore_ms: int = 1200) -> None:
+    """Briefly flash a widget's effective background (Entry needs readonlybackground)."""
+    opt = "readonlybackground" if "readonlybackground" in w.keys() else "background"
+    old = w.cget(opt)
+    w.configure(**{opt: color})
+    w.after(restore_ms, lambda: w.configure(**{opt: old}))
+
+
 def _open_file(path: Path) -> None:
     try:
         os.startfile(str(path))                      # Windows
@@ -151,7 +180,7 @@ class InfoWindow(tk.Toplevel):
         bar.pack(fill="x")
         tk.Button(bar, text="◀ prev", command=lambda: self._step(-1)).pack(side="left", padx=2, pady=2)
         tk.Button(bar, text="next ▶", command=lambda: self._step(1)).pack(side="left", padx=2)
-        self.view_title = tk.Label(bar, text="—", font=("Segoe UI", 9, "bold"))
+        self.view_title = _selectable(bar, "—", font=("Segoe UI", 9, "bold"))
         self.view_title.pack(side="left", padx=10)
         tk.Button(bar, text="reset", command=self._reset_view).pack(side="right", padx=2)
         tk.Button(bar, text="zoom −", command=lambda: self._zoom_btn(1.25)).pack(side="right", padx=2)
@@ -223,8 +252,8 @@ class InfoWindow(tk.Toplevel):
         # labels are scanned sideways: start them at the configured CCW quarter-turn
         # (default 1 = upright); the rotate buttons still compose on top of this.
         self._rot = {"label": int(self.cfg.gui.label_rotate_quarter_turns) % 4, "thumb": 0}
-        self.view_title.configure(
-            text=f"{entry.alias}   [{self.cur_idx + 1}/{len(self.entries)}]")
+        _set_selectable(
+            self.view_title, f"{entry.alias}   [{self.cur_idx + 1}/{len(self.entries)}]")
         self._raw["label"] = _read_rgb(self._label_path(entry))
         self._raw["thumb"] = _read_rgb(
             entry.thumb_path if entry.thumb_path.exists() else None)
@@ -269,9 +298,9 @@ class InfoWindow(tk.Toplevel):
                          row=0, column=c, sticky="ew")
         for i, (_, r) in enumerate(self.df.iterrows(), start=1):
             file_v, scene_v = str(r["file"]), str(r["scene"])
-            tk.Label(parent, text=file_v, anchor="w", font=("Consolas", 8)).grid(
+            _selectable(parent, file_v, font=("Consolas", 8)).grid(
                 row=i, column=0, sticky="w", padx=3)
-            anchor = tk.Label(parent, text=scene_v, anchor="w", font=("Consolas", 8))
+            anchor = _selectable(parent, scene_v, font=("Consolas", 8))
             anchor.grid(row=i, column=1, sticky="w", padx=3)
             self._row_anchor[(file_v, scene_v)] = anchor
             for c, col in enumerate(_EDIT_COLS, start=len(_RO_COLS)):
@@ -295,9 +324,7 @@ class InfoWindow(tk.Toplevel):
         self.table.canvas.update_idletasks()
         total = max(1, self.table.interior.winfo_height())
         self.table.canvas.yview_moveto(max(0.0, w.winfo_y() / total))
-        old = w.cget("background")
-        w.configure(background="#fff3b0")
-        self.after(1200, lambda: w.configure(background=old))
+        _flash_bg(w, "#fff3b0")
 
     def on_save(self) -> None:
         for (i, col), var in self.cell_vars.items():
