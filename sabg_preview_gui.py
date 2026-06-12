@@ -32,7 +32,7 @@ import cv2
 import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
-from matplotlib.patches import Circle
+from matplotlib.patches import Circle, Rectangle
 from matplotlib.widgets import RectangleSelector
 
 import sabg_gui_widgets as gw
@@ -97,6 +97,7 @@ class PreviewWindow(tk.Toplevel):
         self.roi_rect: tuple[int, int, int, int] | None = None   # full-res (x,y,w,h)
         self.layers: dict | None = None
         self._disp_artist = None                           # thumbnail base AxesImage
+        self._saved_roi_artist = None                      # static outline of a remembered ROI
         self._setting_extents = False                      # guard for programmatic clamp
 
         self.manual_auto = tk.BooleanVar(value=True)       # auto threshold on ROI
@@ -116,6 +117,9 @@ class PreviewWindow(tk.Toplevel):
         self.field_vars: dict[tuple[str, str], tk.Variable] = {}
         self._photo_refs: list[tk.PhotoImage] = []         # keep picker thumbs alive
         self._sections: list | None = None                 # cached SectionEntry objs (stable identity)
+        # per-section memory (keyed by scene.key): the pending ROI rectangle and the
+        # zoom/pan, so returning to a section restores both (like a resolution change).
+        self._section_state: dict[str, dict] = {}
         self.order_mode = tk.StringVar(value=gw.SECTION_ORDER_MODES[0])
         self._picker = None                                # picker handle (marker + arrow nav)
         self._dirty = False
@@ -743,10 +747,19 @@ class PreviewWindow(tk.Toplevel):
     def _select_section(self, entry: preview.SectionEntry) -> None:
         if entry is not self.entry and not self._confirm_discard_exclusion("switch sections"):
             return                            # keep the current section + its unsaved mask
+        # Remember the outgoing section's pending ROI + view before we tear it down,
+        # so a later return restores them (captured here while disp_rgb/axes are live).
+        if self.entry is not None:
+            self._section_state[self.entry.scene.key] = {
+                "roi_rect": self.roi_rect,
+                "view_frac": self._capture_view_frac(),
+            }
         self.entry = entry
         if self._picker is not None:
             self._picker.highlight(entry)     # mark the current section in the list
-        self.clear_roi(refresh=False)         # switching sections clears any ROI
+        self.clear_roi(refresh=False)         # tears down the old ROI before the reload
+        saved = self._section_state.get(entry.scene.key, {})
+        self.roi_rect = saved.get("roi_rect")     # restore the remembered rectangle (if any)
         self.excl_mask = None                 # reload the section's mask (or blank)
         self._excl_dirty = False              # a freshly loaded section starts clean
         self._excl_artist = None
@@ -754,7 +767,7 @@ class PreviewWindow(tk.Toplevel):
         self.brush_mode = None
         self.status.configure(text=f"{entry.alias}: loading view…")
         self.nb.select(0)
-        self._reload_display()
+        self._reload_display(view_frac=saved.get("view_frac"))
 
     def _res_labels(self) -> list[str]:
         """px/µm picker labels (one per thumb multiplier) + fill ``_res_to_mult``.
@@ -773,16 +786,20 @@ class PreviewWindow(tk.Toplevel):
             self.view_res.set(labels[0])
         return labels
 
-    def _reload_display(self, preserve_view: bool = False) -> None:
+    def _reload_display(self, preserve_view: bool = False, view_frac=None) -> None:
         """(Re)load the section's display image for ROI drawing (thumb or finer).
 
-        *preserve_view* (a resolution change, not a section switch) keeps the user
-        looking at the same area: the current zoom is captured as fractions of the
-        image and restored after the new image loads (both span the whole scene bbox).
+        *preserve_view* (a resolution change) keeps the user looking at the same area:
+        the current zoom is captured as fractions of the image and restored after the
+        new image loads (both span the whole scene bbox). *view_frac* (a section switch)
+        supplies a previously-remembered view for this section directly; it wins over
+        *preserve_view*. Neither set => full extent.
         """
         if self.entry is None:
             return
-        self._pending_view_frac = self._capture_view_frac() if preserve_view else None
+        self._pending_view_frac = (
+            view_frac if view_frac is not None
+            else (self._capture_view_frac() if preserve_view else None))
         mult = self._res_to_mult.get(self.view_res.get(), 1)
         if mult <= 1:
             try:
@@ -812,6 +829,7 @@ class PreviewWindow(tk.Toplevel):
         self._excl_artist = None                 # cleared with the axes
         self._excl_rgba = None                   # rebuilt by _refresh_excl_overlay below
         self._brush_cursor = None                # patch removed with the axes clear
+        self._saved_roi_artist = None            # remembered-ROI outline (redrawn below)
         self.thumb_ax.set_axis_off()
         self._disp_artist = self.thumb_ax.imshow(
             self._wb(rgb, "disp") if self.wb_on.get() else rgb)
@@ -839,13 +857,22 @@ class PreviewWindow(tk.Toplevel):
         self.thumb_canvas.draw_idle()
         self.thumb_nav.set_home()
         self._restore_pending_view()           # re-zoom to the carried area after a res change
+        # A remembered (but not-yet-opened) ROI shows as a static outline so it's "still
+        # there" on return; clicking Draw ROI then turns it into the editable selector.
+        self._draw_saved_roi_outline()
         # Selector stays inactive here (left-drag pans by default); activation is
         # owned by Draw/Open/Clear ROI + the brush, not by reloading the display.
         self._refresh_excl_overlay()
         self._update_excl_buttons()
+        self._update_roi_buttons()             # a remembered rect re-enables Open/Clear ROI
         if self.roi_rgb is None:
-            self.status.configure(
-                text=f"{self.entry.alias}: drag to pan; 'Draw ROI' to select a region.")
+            if self.roi_rect is not None:
+                self.status.configure(
+                    text=f"{self.entry.alias}: remembered ROI shown — 'Draw ROI' to edit, "
+                         "'Open ROI' to read it, 'Clear ROI' to drop it.")
+            else:
+                self.status.configure(
+                    text=f"{self.entry.alias}: drag to pan; 'Draw ROI' to select a region.")
 
     def _capture_view_frac(self) -> tuple | None:
         """Current thumbnail view as (fx0, fx1, fy0, fy1) fractions of the image
@@ -906,6 +933,7 @@ class PreviewWindow(tk.Toplevel):
         self.brush_mode = None
         self.nb.select(0)
         self._set_draw_active(True)
+        self._clear_saved_roi_outline()        # the editable selector replaces the static one
         if self.roi_rect is not None and self.disp_rgb is not None:
             # Re-activating with a still-pending rectangle: keep it and let the user
             # edit it (don't erase), re-seeding the on-screen handles from the stored rect.
@@ -941,6 +969,29 @@ class PreviewWindow(tk.Toplevel):
         finally:
             self._setting_extents = False
         self.thumb_canvas.draw_idle()
+
+    def _draw_saved_roi_outline(self) -> None:
+        """Draw a static dashed outline of a remembered (not-yet-opened) ROI rectangle
+        so it stays visible after a section round-trip. Skipped while the editable
+        selector is active (Draw ROI owns the display then) or once a ROI is opened."""
+        if (self.roi_rect is None or self.disp_rgb is None or self.entry is None
+                or self.roi_rgb is not None or self.selector.get_active()):
+            return
+        x0, x1, y0, y1 = self._rect_to_extents(self.roi_rect)
+        self._saved_roi_artist = Rectangle(
+            (x0, y0), x1 - x0, y1 - y0, fill=False, edgecolor="orange",
+            linewidth=1.5, linestyle="--")
+        self.thumb_ax.add_patch(self._saved_roi_artist)
+        self.thumb_canvas.draw_idle()
+
+    def _clear_saved_roi_outline(self) -> None:
+        """Remove the static remembered-ROI outline (e.g. when Draw ROI takes over)."""
+        if self._saved_roi_artist is not None:
+            try:
+                self._saved_roi_artist.remove()
+            except Exception:
+                pass
+            self._saved_roi_artist = None
 
     def _on_rect(self, eclick, erelease) -> None:
         if self._setting_extents or self.entry is None or self.disp_rgb is None:
@@ -1001,8 +1052,13 @@ class PreviewWindow(tk.Toplevel):
         """Drop the current ROI and return to an editable thumbnail.
 
         *refresh* redraws the thumbnail (removing the rectangle) and switches to
-        the Thumbnail tab; pass False when a new section is about to reload it.
+        the Thumbnail tab; pass False when a new section is about to reload it. A
+        user-initiated clear (refresh=True) also forgets this section's remembered
+        rectangle, so it won't reappear on return.
         """
+        if refresh and self.entry is not None:
+            self._section_state.get(self.entry.scene.key, {}).pop("roi_rect", None)
+        self._clear_saved_roi_outline()
         self.roi_rgb = None
         self.roi_px_um = None
         self.roi_rect = None
