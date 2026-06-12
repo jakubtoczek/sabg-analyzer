@@ -96,6 +96,11 @@ class PreviewWindow(tk.Toplevel):
         self.roi_px_um: float | None = None
         self.roi_rect: tuple[int, int, int, int] | None = None   # full-res (x,y,w,h)
         self.layers: dict | None = None
+        # provenance of the result currently shown in the Result panel, so it can flag
+        # when the view (section / ROI) has moved on since that result was computed.
+        self._result_alias: str | None = None
+        self._result_roi: tuple[int, int, int, int] | None = None
+        self._result_scope: str = "ROI"
         self._disp_artist = None                           # thumbnail base AxesImage
         self._saved_roi_artist = None                      # static outline of a remembered ROI
         self._setting_extents = False                      # guard for programmatic clamp
@@ -469,6 +474,38 @@ class PreviewWindow(tk.Toplevel):
             f"edge {int(row.get('edge_px', 0)):,} px",
         ]
         self.stats_label.configure(text="\n".join(lines))
+        self._record_result_provenance("section")
+
+    # -- result provenance / staleness -------------------------------------
+    @staticmethod
+    def _roi_desc(rect: tuple[int, int, int, int] | None) -> str:
+        return f"ROI {rect[2]}×{rect[3]}" if rect else "no ROI"
+
+    def _record_result_provenance(self, scope: str) -> None:
+        """Stamp the just-shown result with the section + ROI it came from."""
+        self._result_alias = self.entry.alias if self.entry else None
+        self._result_roi = self.roi_rect
+        self._result_scope = scope
+        self._update_result_provenance()
+
+    def _update_result_provenance(self) -> None:
+        """Refresh the Result provenance line; amber when the view has moved on."""
+        if not hasattr(self, "result_meta"):
+            return
+        if self._result_alias is None:
+            self.result_meta.configure(text="(no result yet)", fg="#888")
+            return
+        src = self._roi_desc(self._result_roi) if self._result_scope == "ROI" else "whole section"
+        cur_alias = self.entry.alias if self.entry else None
+        stale = (cur_alias != self._result_alias) or (
+            self._result_scope == "ROI" and self.roi_rect != self._result_roi)
+        if stale:
+            self.result_meta.configure(
+                text=f"◑ result: {self._result_alias} · {src} — view changed (recompute)",
+                fg="#c8862a")
+        else:
+            self.result_meta.configure(
+                text=f"● showing {self._result_alias} · {src}", fg="#3a7d44")
 
     # -- manual exclusion brush --------------------------------------------
     def _excl_path(self) -> Path | None:
@@ -692,6 +729,11 @@ class PreviewWindow(tk.Toplevel):
                                     anchor="w", justify="left", font=("Consolas", 9),
                                     fg="#333")
         self.stats_label.pack(fill="x")
+        # provenance / staleness line: which section + ROI this result came from, and
+        # whether the current view has moved on since (the Result can lag the view).
+        self.result_meta = tk.Label(res, text="(no result yet)", anchor="w", justify="left",
+                                    font=("Segoe UI", 8), fg="#888")
+        self.result_meta.pack(fill="x")
 
         # whole-section compute (real analyze_scene; heavy) -> caches + section stats
         tk.Button(body, text="▣  Compute whole section…",
@@ -768,6 +810,7 @@ class PreviewWindow(tk.Toplevel):
         self.status.configure(text=f"{entry.alias}: loading view…")
         self.nb.select(0)
         self._reload_display(view_frac=saved.get("view_frac"))
+        self._update_result_provenance()      # result now lags the new section
 
     def _res_labels(self) -> list[str]:
         """px/µm picker labels (one per thumb multiplier) + fill ``_res_to_mult``.
@@ -1020,6 +1063,7 @@ class PreviewWindow(tk.Toplevel):
         self.status.configure(
             text=f"ROI {ww}x{hh}px (~{um:.0f}µm){capped} — adjust, then 'Open ROI'.")
         self._update_roi_buttons()
+        self._update_result_provenance()      # result now lags the new rectangle
 
     def on_open_roi(self) -> None:
         """Read the pending rectangle at full resolution into the ROI tab."""
@@ -1070,6 +1114,7 @@ class PreviewWindow(tk.Toplevel):
             self.nb.tab(self.roi_tab, state="disabled")    # no ROI -> grey the tab
         self._roi_hint()
         self._update_roi_buttons()
+        self._update_result_provenance()       # result now lags the cleared ROI
         if refresh and self.entry is not None and self.disp_rgb is not None:
             self._show_display(self.disp_rgb)   # clears axes -> removes the rectangle
             self.nb.select(0)
@@ -1232,6 +1277,7 @@ class PreviewWindow(tk.Toplevel):
             text=f"%SABG={pct:.2f}  thr={lay['thr']:.4f}  "
                  f"tissue={100*t.mean():.1f}%  fold={100*lay['fold'].mean():.1f}%")
         self._show_stats(lay, self.roi_px_um, scope="ROI")
+        self._record_result_provenance("ROI")
         self._redraw()
 
     def _show_stats(self, lay: dict, px_um: float | None, scope: str = "ROI") -> None:
