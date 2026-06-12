@@ -215,8 +215,8 @@ overlay:
   show_nontissue: true         # shade non-tissue so the tissue mask can be audited
   excluded_color: [255, 0, 255]  # RGB highlight for the manual exclusion mask (magenta)
   excluded_alpha: 0.55         # exclusion blend strength (0-1)
-  sabg_candidate_color: [0, 180, 180]  # pre-rejection SABG+ audit underlay (cyan)
-  sabg_candidate_alpha: 0.30   # candidate underlay blend strength (0-1)
+  sabg_candidate_color: [0, 180, 180]  # pre-rejection SABG+ audit layer (cyan)
+  sabg_candidate_alpha: 0.45   # candidate blend (0-1); default-on primary audit layer
 
 # ---- White balance (display/figures only; quantification uses raw pixels) --
 whitebalance:
@@ -258,6 +258,10 @@ gui:
   info_opens: [sections, labels]
   preview_roi_cap_um: 1000.0  # Preview/Tune: max ROI side when drawing (default 2x fov_um)
   preview_hi_res: false       # open the selected thumb at higher resolution by default
+  # Default overlay-layer visibility in the Layers panel (Preview + Info). Only the keys
+  # you list override LAYER_SPEC's per-layer default; unlisted layers keep their default.
+  # Default flips to candidate-on / SABG-off (audit the pre-rejection teal first).
+  layer_defaults: {sabg_candidate: true, sabg: false}
 
 # ---- Section alias (used in results.csv + every output filename) ----------
 # Each section gets a short, human-readable id built from the sections.csv

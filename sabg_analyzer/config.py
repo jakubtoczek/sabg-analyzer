@@ -73,7 +73,7 @@ class OverlayParams:
     excluded_color: tuple[int, int, int] = (255, 0, 255)  # manual exclusion mask (magenta)
     excluded_alpha: float = 0.55                        # exclusion blend strength
     sabg_candidate_color: tuple[int, int, int] = (0, 180, 180)  # pre-rejection SABG+ (cyan)
-    sabg_candidate_alpha: float = 0.30                  # candidate underlay blend strength
+    sabg_candidate_alpha: float = 0.45                  # candidate blend (now a default-on primary layer)
 
 
 @dataclass
@@ -122,6 +122,12 @@ class GuiParams:
     # whether the picker opens the selected thumb at higher resolution by default.
     preview_roi_cap_um: float = 1000.0
     preview_hi_res: bool = False
+    # Default overlay-layer visibility in the Layers panel (Preview + Info). Only the
+    # listed keys override the per-layer `default show` baked into `LAYER_SPEC`; any
+    # layer not named here keeps its LAYER_SPEC default. Default flips the audit view to
+    # candidate-on / SABG-off so the pre-rejection teal is what you see first.
+    layer_defaults: dict[str, bool] = field(
+        default_factory=lambda: {"sabg_candidate": True, "sabg": False})
 
 
 @dataclass
@@ -293,7 +299,11 @@ def load_config(path: str | Path | None) -> Config:
     if "progress" in raw and raw["progress"]:
         _update_dataclass(cfg.progress, raw["progress"])
     if "gui" in raw and raw["gui"]:
-        _update_dataclass(cfg.gui, raw["gui"])
+        g = dict(raw["gui"])
+        ld = g.pop("layer_defaults", None)
+        if isinstance(ld, dict):                 # merge so naming one layer keeps the rest
+            cfg.gui.layer_defaults.update({k: bool(v) for k, v in ld.items()})
+        _update_dataclass(cfg.gui, g)
     if "paths" in raw and raw["paths"]:
         _update_dataclass(cfg.paths, raw["paths"])
     if "alias" in raw and raw["alias"]:

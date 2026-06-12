@@ -909,8 +909,9 @@ def build_layers_panel(parent, cfg, show_vars: dict, on_change: Callable) -> Non
     redraw-only callback). ``show_vars[key]`` holds each show toggle.
     """
     ov = cfg.overlay
+    layer_defaults = getattr(cfg.gui, "layer_defaults", {}) or {}
     for i, (key, color_attr, alpha_attr, default) in enumerate(LAYER_PANEL_SPEC):
-        sv = tk.BooleanVar(value=default)
+        sv = tk.BooleanVar(value=layer_defaults.get(key, default))
         show_vars[key] = sv
         tk.Checkbutton(parent, variable=sv, command=on_change).grid(
             row=i, column=0, sticky="w")
