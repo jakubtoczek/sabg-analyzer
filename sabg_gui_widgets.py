@@ -958,6 +958,36 @@ def order_sections(entries, mode: str, out_dir=None):
     return es                                          # "Scan order" (default)
 
 
+def results_available(out_dir) -> bool:
+    """True when <out_dir>/results.csv exists (a full analysis has been run). Used to
+    gate the "%SABG ↓" order mode, which needs those per-section percentages."""
+    if not out_dir:
+        return False
+    from pathlib import Path
+    return (Path(out_dir) / "results.csv").exists()
+
+
+def sync_order_menu_state(option_menu, out_dir) -> None:
+    """Grey out the "%SABG ↓" entry on a section-order OptionMenu unless a full
+    analysis (results.csv) exists; without it that mode silently falls back to scan
+    order, which is confusing. Matches the entry by substring so the ↓ arrow / any
+    relabel can't break it."""
+    try:
+        menu = option_menu["menu"]
+        state = "normal" if results_available(out_dir) else "disabled"
+        end = menu.index("end")
+        if end is None:
+            return
+        for i in range(end + 1):
+            try:
+                if "%SABG" in str(menu.entrycget(i, "label")):
+                    menu.entryconfigure(i, state=state)
+            except tk.TclError:
+                pass
+    except Exception:
+        pass
+
+
 def _results_pct(out_dir) -> dict:
     """{scene key -> pct_sabg} from <out_dir>/results.csv, or {} if unavailable."""
     if not out_dir:

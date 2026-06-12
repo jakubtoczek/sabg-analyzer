@@ -153,10 +153,11 @@ class PreviewWindow(tk.Toplevel):
         orow = tk.Frame(left)
         orow.pack(fill="x", padx=4)
         tk.Label(orow, text="order", font=("Segoe UI", 8)).pack(side="left")
-        ttk.OptionMenu(orow, self.order_mode, gw.SECTION_ORDER_MODES[0],
-                       *gw.SECTION_ORDER_MODES,
-                       command=lambda _v: self._populate_picker(refetch=False)).pack(
-                           side="left", fill="x", expand=True)
+        self._order_menu = ttk.OptionMenu(
+            orow, self.order_mode, gw.SECTION_ORDER_MODES[0], *gw.SECTION_ORDER_MODES,
+            command=lambda _v: self._populate_picker(refetch=False))
+        self._order_menu.pack(side="left", fill="x", expand=True)
+        gw.sync_order_menu_state(self._order_menu, self.out_dir)   # grey %SABG if no results.csv
         self.pick = gw.ScrollFrame(left)
         self.pick.pack(fill="both", expand=True)
 
@@ -735,6 +736,8 @@ class PreviewWindow(tk.Toplevel):
         self._picker = gw.thumbnail_picker(
             self.pick.interior, ordered, self._select_section, self._photo_refs,
             selected=self.entry)
+        if getattr(self, "_order_menu", None) is not None:
+            gw.sync_order_menu_state(self._order_menu, self.out_dir)
 
     # -- section / ROI -----------------------------------------------------
     def _select_section(self, entry: preview.SectionEntry) -> None:

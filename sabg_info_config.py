@@ -105,10 +105,11 @@ class InfoWindow(tk.Toplevel):
         orow = tk.Frame(left)
         orow.pack(fill="x", padx=4)
         tk.Label(orow, text="order", font=("Segoe UI", 8)).pack(side="left")
-        ttk.OptionMenu(orow, self.order_mode, gw.SECTION_ORDER_MODES[0],
-                       *gw.SECTION_ORDER_MODES,
-                       command=lambda _v: self._populate_picker()).pack(
-                           side="left", fill="x", expand=True)
+        self._order_menu = ttk.OptionMenu(
+            orow, self.order_mode, gw.SECTION_ORDER_MODES[0], *gw.SECTION_ORDER_MODES,
+            command=lambda _v: self._populate_picker())
+        self._order_menu.pack(side="left", fill="x", expand=True)
+        gw.sync_order_menu_state(self._order_menu, self.out_dir)   # grey %SABG if no results.csv
         self._pick = gw.ScrollFrame(left)
         self._pick.pack(fill="both", expand=True)
         try:
@@ -197,6 +198,8 @@ class InfoWindow(tk.Toplevel):
         cur = self.entries[self.cur_idx] if 0 <= self.cur_idx < len(self.entries) else None
         self._picker = gw.thumbnail_picker(
             self._pick.interior, ordered, self._on_pick, self._photo_refs, selected=cur)
+        if getattr(self, "_order_menu", None) is not None:
+            gw.sync_order_menu_state(self._order_menu, self.out_dir)
 
     def _on_pick(self, entry) -> None:
         for i, e in enumerate(self.entries):
