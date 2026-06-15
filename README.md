@@ -328,4 +328,4 @@ tuner) · `sabg_gui/widgets.py` (shared widgets: layers panel, detection section
 `sabg_gui/info_config.py` (Info + Config windows).
 
 ## License
-[MIT](LICENSE) © 2026 Jakub Toczek.
+[MIT](LICENSE).
