@@ -32,18 +32,28 @@ import cv2
 import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
+from matplotlib.font_manager import FontProperties
 from matplotlib.patches import Circle, Rectangle
 from matplotlib.widgets import RectangleSelector
+from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 
 import sabg_gui_widgets as gw
 from sabg_gui_widgets import CanvasNav      # shared mouse-only canvas navigation
-from sabg_analyzer import overlay, preview, whitebalance
+from sabg_analyzer import export, overlay, preview, whitebalance
 from sabg_analyzer.config import load_config
 
 _VIEW_MULTS = [1, 2, 4, 8]          # thumb-resolution multipliers for the px/µm picker
 # Scale-bar corner labels (clear) -> the export.draw_scalebar position codes.
 _SB_POS = {"bottom-right": "br", "bottom-left": "bl",
            "top-right": "tr", "top-left": "tl"}
+# ...and the same corners as matplotlib legend `loc` codes (for the live scale bar).
+_SB_LOC = {"br": "lower right", "bl": "lower left",
+           "tr": "upper right", "tl": "upper left"}
+
+
+def _fmt_bar_um(bar_um: float) -> str:
+    """Scale-bar label: millimetres for >=1 mm, else micrometres (matches export)."""
+    return f"{bar_um / 1000:g} mm" if bar_um >= 1000 else f"{bar_um:g} µm"
 
 
 class _GuiProgress:
@@ -115,9 +125,10 @@ class PreviewWindow(tk.Toplevel):
         self.sb_len = tk.StringVar(value="Auto")           # scale-bar length (µm)
         self.sb_label = tk.BooleanVar(value=True)
         self.sb_pos = tk.StringVar(value="bottom-right")
+        self.sb_live = tk.BooleanVar(value=False)          # draw a live (non-burned) bar on the image
+        self._sb_live_artist: dict = {"thumb": None, "roi": None}  # per-axis AnchoredSizeBar
         self.wb_on = tk.BooleanVar(value=False)            # raw <-> white-balanced display
         self._wb_cache: dict[str, tuple] = {}              # which -> (src_rgb, wb_rgb)
-        self._sb_preview_canvases: list[tk.Canvas] = []    # scale-bar corner schematics
         self.show_vars: dict[str, tk.BooleanVar] = {}
         self.field_vars: dict[tuple[str, str], tk.Variable] = {}
         self._photo_refs: list[tk.PhotoImage] = []         # keep picker thumbs alive
@@ -143,10 +154,9 @@ class PreviewWindow(tk.Toplevel):
         self._brush_cursor = None                          # hover brush-outline patch
         self._painting = False
 
-        for _v in (self.sb_pos, self.sb_len, self.sb_label):
-            _v.trace_add("write", lambda *_: self._draw_sb_preview())
+        for _v in (self.sb_pos, self.sb_len, self.sb_label, self.sb_live):
+            _v.trace_add("write", lambda *_: self._refresh_live_scalebar_all())
         self._build_layout()
-        self._draw_sb_preview()
         self._populate_picker()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(100, self._drain_queue)
@@ -243,7 +253,8 @@ class PreviewWindow(tk.Toplevel):
         self.thumb_canvas.get_tk_widget().pack(fill="both", expand=True)
         # Left-drag pans the thumbnail UNLESS a ROI is being drawn or the brush is on.
         self.thumb_nav = CanvasNav(self.thumb_canvas, self.thumb_ax,
-                                   can_left_pan=self._thumb_can_pan)
+                                   can_left_pan=self._thumb_can_pan,
+                                   on_view_change=lambda: self._refresh_live_scalebar("thumb"))
         # useblit + props => the rectangle renders live while dragging; interactive
         # handles (+ drag_from_anywhere) let it be resized/moved before opening.
         self.selector = RectangleSelector(
@@ -276,7 +287,8 @@ class PreviewWindow(tk.Toplevel):
         self.roi_ax.set_axis_off()
         self.roi_canvas = FigureCanvasTkAgg(self.roi_fig, master=tab)
         self.roi_canvas.get_tk_widget().pack(fill="both", expand=True)
-        self.roi_nav = CanvasNav(self.roi_canvas, self.roi_ax)
+        self.roi_nav = CanvasNav(self.roi_canvas, self.roi_ax,
+                                 on_view_change=lambda: self._refresh_live_scalebar("roi"))
         self._roi_hint()
         self.nb.tab(self.roi_tab, state="disabled")    # greyed until a ROI is opened
 
@@ -316,7 +328,8 @@ class PreviewWindow(tk.Toplevel):
                           strip_parent: tk.Frame | None = None,
                           after_widget: tk.Widget | None = None) -> None:
         """Controls present on BOTH tabs: Reset view, white-balance toggle, a
-        collapsible scale-bar strip (length/label/corner + preview), Export, Help.
+        collapsible scale-bar strip (length/label/corner + 'on image' live toggle),
+        Export, Help.
 
         *strip_parent*/*after_widget* place the collapsible scale-bar strip; they
         default to opening just below *bar* (single-row ROI toolbar). The thumbnail tab
@@ -338,49 +351,66 @@ class PreviewWindow(tk.Toplevel):
         tk.Checkbutton(sb, text="label", variable=self.sb_label).pack(side="left")
         ttk.OptionMenu(sb, self.sb_pos, self.sb_pos.get(),
                        *_SB_POS.keys()).pack(side="left")
-        cvp = tk.Canvas(sb, width=84, height=40, highlightthickness=1,
-                        highlightbackground="#aaa", bg="white")
-        cvp.pack(side="left", padx=4)
-        self._sb_preview_canvases.append(cvp)
+        # Live (non-burned) bar drawn on the image as-is: follows the length/label/corner
+        # above, repositions on pan, rescales on zoom. Export still burns its own bar in.
+        tk.Checkbutton(sb, text="on image", variable=self.sb_live).pack(side="left", padx=(8, 0))
         tk.Button(bar, text="Export…",
                   command=lambda: self.on_export_image(source)).pack(side="left", padx=(8, 2))
         tk.Button(bar, text="?", width=2, command=self._show_help).pack(side="right", padx=2)
 
-    def _sb_preview_label(self) -> str:
-        """The length text the scale-bar preview shows ('Auto' / '100 µm' / '1 mm')."""
-        sel = self.sb_len.get()
-        if sel in ("", "Auto"):
-            return "Auto"
-        try:
-            v = float(sel)
-        except ValueError:
-            return sel
-        return f"{v / 1000:g} mm" if v >= 1000 else f"{v:g} µm"
+    def _refresh_live_scalebar_all(self) -> None:
+        """Refresh the live scale bar on both axes (e.g. after a length/label/corner change)."""
+        self._refresh_live_scalebar("thumb")
+        self._refresh_live_scalebar("roi")
 
-    def _draw_sb_preview(self) -> None:
-        """Mini render of the scale bar as it'll appear on export: a short black bar in
-        the chosen corner with its length label above it (when labels are on)."""
-        pos = _SB_POS.get(self.sb_pos.get(), "br")
-        right = pos.endswith("r")
-        bottom = pos.startswith("b")
-        label_on = bool(self.sb_label.get())
-        txt = self._sb_preview_label()
-        for cv in getattr(self, "_sb_preview_canvases", []):
-            cv.delete("all")
-            w = int(cv["width"]); h = int(cv["height"])
-            m = 5
-            bw = max(10, w // 3); bh = 4
-            x1 = (w - m - bw) if right else m
-            x2 = x1 + bw
-            if bottom:
-                y2 = h - m; y1 = y2 - bh
-            else:
-                y1 = m + (12 if label_on else 0); y2 = y1 + bh
-            cv.create_rectangle(x1, y1, x2, y2, fill="black", outline="")
-            if label_on:
-                cv.create_text(x2 if right else x1, y1 - 2, text=txt,
-                               anchor="se" if right else "sw",
-                               font=("Segoe UI", 7), fill="black")
+    def _live_bar_um(self, source: str, px_um: float, ax) -> float:
+        """The bar length in µm for *source*: the chosen fixed length, or — for 'Auto' —
+        a nice value snapped to the CURRENT view width (so it tracks zoom like export does)."""
+        sel = self.sb_len.get()
+        if sel not in ("", "Auto"):
+            try:
+                return float(sel)
+            except ValueError:
+                pass
+        x0, x1 = ax.get_xlim()
+        vis_px = max(1, int(round(abs(x1 - x0))))
+        target = 1000.0 if source == "thumb" else 200.0   # match the export presets
+        return export.adaptive_bar_um(vis_px, px_um, target_um=target)
+
+    def _refresh_live_scalebar(self, source: str) -> None:
+        """(Re)draw or clear the live (non-burned) scale bar on the thumb or ROI axis.
+
+        Length is set in DATA units (µm ÷ µm/px), so matplotlib rescales it on zoom; the
+        bar is anchored to a corner (``loc``), so it stays put on pan; thickness is a fixed
+        fraction of the visible height, so it reads ~constant on screen across zoom."""
+        ax = self.thumb_ax if source == "thumb" else self.roi_ax
+        canvas = self.thumb_canvas if source == "thumb" else self.roi_canvas
+        old = self._sb_live_artist.get(source)
+        if old is not None:
+            try:
+                old.remove()
+            except Exception:
+                pass
+            self._sb_live_artist[source] = None
+        px_um = self._loaded_um if source == "thumb" else self.roi_px_um
+        has_img = (self.disp_rgb is not None) if source == "thumb" else (self.roi_rgb is not None)
+        if not self.sb_live.get() or not px_um or not has_img:
+            canvas.draw_idle()
+            return
+        bar_um = self._live_bar_um(source, px_um, ax)
+        size_data = bar_um / px_um
+        y0, y1 = ax.get_ylim()
+        size_vertical = max(abs(y1 - y0) * 0.006, size_data * 1e-3)
+        label = _fmt_bar_um(bar_um) if self.sb_label.get() else ""
+        loc = _SB_LOC.get(_SB_POS.get(self.sb_pos.get(), "br"), "lower right")
+        bar = AnchoredSizeBar(
+            ax.transData, size_data, label, loc, pad=0.3, borderpad=0.5, sep=3,
+            color="black", frameon=True, size_vertical=size_vertical,
+            label_top=True, fontproperties=FontProperties(size=8))
+        bar.patch.set(facecolor="white", edgecolor="none", alpha=0.7)
+        ax.add_artist(bar)
+        self._sb_live_artist[source] = bar
+        canvas.draw_idle()
 
     def _wb(self, rgb: np.ndarray, which: str) -> np.ndarray:
         """White-balanced copy of *rgb* (cached per *which* by image identity)."""
@@ -694,6 +724,7 @@ class PreviewWindow(tk.Toplevel):
 
     def _roi_hint(self) -> None:
         self.roi_ax.clear()
+        self._sb_live_artist["roi"] = None     # live scale bar cleared with the axes
         self.roi_ax.set_axis_off()
         self.roi_ax.text(0.5, 0.5, "Draw a ROI on the Thumbnail tab,\nthen 'Open ROI'.",
                          ha="center", va="center", fontsize=10, color="#888")
@@ -873,6 +904,7 @@ class PreviewWindow(tk.Toplevel):
         self._excl_rgba = None                   # rebuilt by _refresh_excl_overlay below
         self._brush_cursor = None                # patch removed with the axes clear
         self._saved_roi_artist = None            # remembered-ROI outline (redrawn below)
+        self._sb_live_artist["thumb"] = None     # live scale bar cleared with the axes
         self.thumb_ax.set_axis_off()
         self._disp_artist = self.thumb_ax.imshow(
             self._wb(rgb, "disp") if self.wb_on.get() else rgb)
@@ -908,6 +940,7 @@ class PreviewWindow(tk.Toplevel):
         self._refresh_excl_overlay()
         self._update_excl_buttons()
         self._update_roi_buttons()             # a remembered rect re-enables Open/Clear ROI
+        self._refresh_live_scalebar("thumb")   # redraw the live bar over the fresh image
         if self.roi_rgb is None:
             if self.roi_rect is not None:
                 self.status.configure(
@@ -1333,6 +1366,7 @@ class PreviewWindow(tk.Toplevel):
             return
         keep = (self.roi_ax.get_xlim(), self.roi_ax.get_ylim())
         self.roi_ax.clear()
+        self._sb_live_artist["roi"] = None          # live scale bar cleared with the axes
         self.roi_ax.set_axis_off()
         self.roi_ax.imshow(comp)
         self.roi_ax.set_title(f"{self.entry.alias} — ROI", fontsize=9)
@@ -1341,6 +1375,7 @@ class PreviewWindow(tk.Toplevel):
             self.roi_ax.set_ylim(*keep[1])
         else:
             self.roi_nav.set_home()
+        self._refresh_live_scalebar("roi")          # redraw the live bar over the fresh overlay
         self.roi_canvas.draw_idle()
 
     # -- save / export / close ---------------------------------------------
@@ -1452,8 +1487,10 @@ class PreviewWindow(tk.Toplevel):
              "Toggle a publication-style white balance on the displayed image "
              "(quantification always uses raw pixels — display only)."),
             ("Scale bar",
-             "Length (Auto picks a nice value), label on/off, and corner; the little "
-             "schematic shows where the bar lands. Used by Export."),
+             "Length (Auto picks a nice value for the current view), label on/off, and "
+             "corner. 'on image' draws a live bar on the image itself — it stays in the "
+             "chosen corner as you pan and rescales as you zoom (it is NOT burned in). "
+             "The same length/label/corner are used by Export, which burns its bar in."),
             ("Export…",
              "Writes publication presets next to a base name you pick: raw, "
              "white-balanced + scale bar, and (ROI tab) white-balanced + overlay + "
