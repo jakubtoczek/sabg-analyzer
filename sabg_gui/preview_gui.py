@@ -390,14 +390,24 @@ class PreviewWindow(tk.Toplevel):
 
     def _live_bar_um(self, source: str, px_um: float, ax) -> float:
         """The bar length in µm for *source*: the chosen fixed length, or — for 'Auto' —
-        a nice value snapped to the CURRENT view width (so it tracks zoom like export does)."""
+        the largest configured preset that fits the CURRENT view (so Auto spans the whole
+        gui.scalebar_values range as you zoom, not just ~1 mm / 50 µm)."""
         sel = self._sb_len_um()
         if sel != "Auto":
             return float(sel)
         x0, x1 = ax.get_xlim()
-        vis_px = max(1, int(round(abs(x1 - x0))))
-        target = 1000.0 if source == "thumb" else 200.0   # match the export presets
-        return export.adaptive_bar_um(vis_px, px_um, target_um=target)
+        visible_um = max(1.0, abs(x1 - x0)) * px_um
+        max_um = 0.4 * visible_um                          # bar at most ~40% of the view width
+        vals = sorted((float(v) for v in (self.cfg.gui.scalebar_values or [])
+                       if float(v) > 0), reverse=True)
+        if not vals:                                       # no presets configured -> fall back
+            return export.adaptive_bar_um(
+                max(1, int(round(abs(x1 - x0)))), px_um,
+                target_um=(1000.0 if source == "thumb" else 200.0))
+        for v in vals:
+            if v <= max_um:
+                return v
+        return vals[-1]                                    # very zoomed in: smallest preset
 
     def _refresh_live_scalebar(self, source: str) -> None:
         """(Re)draw or clear the live (non-burned) scale bar on the thumb or ROI axis.
