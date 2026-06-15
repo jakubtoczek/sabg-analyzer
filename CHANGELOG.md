@@ -18,7 +18,35 @@ minor; the git tag (`vX.Y.Z`) marks when that minor is blessed.
 A move to **1.0.0** requires: config schema frozen, GUI/UX settled, a minimal
 smoke/regression test, finalized docs, and a successful run by a second user.
 
-## [Unreleased] — 0.4.0
+## [Unreleased] — 0.5.0
+
+Session 17.
+
+### Added
+- **Live (non-burned) scale bar** in Preview/Tune: a new "on image" toggle in the scale-bar strip
+  draws the bar on the image itself, following the existing length / label / corner controls. It
+  stays in its corner while panning and rescales while zooming (length is held in physical µm), so
+  it reads as a true scale at any zoom. Export still burns its own bar into the saved files.
+
+### Changed
+- **Default detection parameters → session-16 tuning (cfg07):** `threshold.scale` 0.825 → **0.70**
+  (a free win — every treated section rose, negatives stayed flat) and the teal grow/expand floors
+  `detection.hyst_teal_min` / `expand_teal_min` 0.04 → **0.02** (lifts faint treated teal, negatives
+  held at the baseline floor). The aggressive teal-0.01 (cfg09) option stays available in config.
+- **Tuning sliders re-centred on the defaults:** each guided sensitivity slider now opens at its
+  midpoint (50) when the parameter is at its program default — notably `threshold.scale` centred on
+  0.70. Ranges were adjusted to keep the default at centre; the raw entry still accepts any value.
+- **Info slide-label default rotation** flipped 180° (`gui.label_rotate_quarter_turns` 1 → **3**) so
+  labels load upright the intended way (the previous default was upside-down).
+- **More compact tuning panel:** each detection stage is now a single always-visible row (composite
+  slider + inline Reset); the per-stage description moved into the "details" expander and the slider
+  tooltip, so all five stages fit at 1320×840 with details collapsed (no scrolling).
+
+### Removed
+- The scale-bar **preview schematic** (the small white square showing the bar's corner) — the new
+  "on image" live bar shows the real placement directly.
+
+## [0.4.0] — 2026-06-12
 
 Session 16.
 
@@ -103,7 +131,8 @@ Baseline: the pushed session-13 state. Summarizes development through sessions 8
 - Single-user local tool: run from `C:\Code\SABG_analyzer\main` with sibling `..\data` /
   `..\outputs`. Not yet pip-installable; no automated tests.
 
-[Unreleased]: https://github.com/jakubtoczek/sabg-analyzer/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/jakubtoczek/sabg-analyzer/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/jakubtoczek/sabg-analyzer/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jakubtoczek/sabg-analyzer/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jakubtoczek/sabg-analyzer/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jakubtoczek/sabg-analyzer/releases/tag/v0.1.0
