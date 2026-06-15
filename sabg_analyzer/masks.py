@@ -125,9 +125,9 @@ def detect_sabg(rgb: np.ndarray, t: np.ndarray, opp: np.ndarray, cfg: Config,
             pos = pos | _grow_connected(pos, cand)
 
     # Pre-rejection candidate (B1 audit layer): the grown positives BEFORE the
-    # fold-drop / edge filter strip anything. The later expand step can grow the
-    # final mask beyond this, so `candidate` is not a strict superset of `sabg`;
-    # `candidate & ~sabg` is exactly what the fold/edge stages rejected.
+    # fold-drop / edge filter strip anything. (After the rejection + expand steps below
+    # we fold the FINAL positives back in, so `candidate` is always a superset of `sabg`
+    # and `candidate & ~sabg` is exactly what the fold/edge stages rejected.)
     candidate = pos.copy()
 
     if cfg.fold.enabled and not cfg.fold.exclude_from_tissue and fold is not None:
@@ -146,6 +146,12 @@ def detect_sabg(rgb: np.ndarray, t: np.ndarray, opp: np.ndarray, cfg: Config,
         if cfg.detection.expand_teal_min > 0:  # don't grow into achromatic edges/tissue
             grown &= pos | (opp >= cfg.detection.expand_teal_min)
         pos = grown
+
+    # The expand step can grow the final mask beyond the pre-rejection snapshot; union the
+    # final positives back in so the candidate audit layer always contains every SABG+ pixel
+    # (no green floating outside the cyan candidate in the overlay). Display layer only —
+    # `sabg` is the quantified mask and is unchanged.
+    candidate = candidate | pos
 
     return {"sabg": pos, "edge_removed": removed, "hot": hot,
             "sabg_candidate": candidate, "deconv": deconv}
