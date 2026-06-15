@@ -133,6 +133,10 @@ class GuiParams:
     # quarter-turns (0-3). Labels are scanned sideways; 3 = upright the intended way (1 was
     # 180° off / upside-down). The in-viewer rotate buttons compose on top and reset per section.
     label_rotate_quarter_turns: int = 3
+    # Preview scale-bar length presets (µm), offered in the "bar" dropdown (plus "Auto").
+    # Shown as mm/µm labels; the live + exported bars use these. Edit to taste.
+    scalebar_values: list[float] = field(
+        default_factory=lambda: [10000, 5000, 2000, 1000, 500, 200, 100, 50, 20, 10])
 
 
 @dataclass
