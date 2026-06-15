@@ -29,7 +29,7 @@ import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
-import sabg_gui_widgets as gw
+from . import widgets as gw
 from sabg_analyzer import metadata, preview
 from sabg_analyzer.config import load_config
 

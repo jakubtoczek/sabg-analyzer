@@ -37,8 +37,8 @@ from matplotlib.patches import Circle, Rectangle
 from matplotlib.widgets import RectangleSelector
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 
-import sabg_gui_widgets as gw
-from sabg_gui_widgets import CanvasNav      # shared mouse-only canvas navigation
+from . import widgets as gw
+from .widgets import CanvasNav              # shared mouse-only canvas navigation
 from sabg_analyzer import export, overlay, preview, whitebalance
 from sabg_analyzer.config import load_config
 
@@ -346,8 +346,10 @@ class PreviewWindow(tk.Toplevel):
         sb = self._collapsible_strip(bar, strip_parent, "⚖ scale bar",
                                      after_widget=after_widget)
         tk.Label(sb, text="bar").pack(side="left", padx=(8, 0))
-        ttk.OptionMenu(sb, self.sb_len, self.sb_len.get(), "Auto", "50", "100",
-                       "200", "500", "1000").pack(side="left")
+        opts = self._sb_len_options()
+        if self.sb_len.get() not in opts:        # keep the var on a valid option
+            self.sb_len.set(opts[0])
+        ttk.OptionMenu(sb, self.sb_len, self.sb_len.get(), *opts).pack(side="left")
         tk.Checkbutton(sb, text="label", variable=self.sb_label).pack(side="left")
         ttk.OptionMenu(sb, self.sb_pos, self.sb_pos.get(),
                        *_SB_POS.keys()).pack(side="left")
@@ -363,15 +365,35 @@ class PreviewWindow(tk.Toplevel):
         self._refresh_live_scalebar("thumb")
         self._refresh_live_scalebar("roi")
 
+    def _sb_len_options(self) -> list[str]:
+        """The "bar" dropdown options: 'Auto' + the configured presets as mm/µm labels."""
+        vals = getattr(self.cfg.gui, "scalebar_values", None) or [1000, 500, 200, 100, 50]
+        opts = ["Auto"]
+        for v in vals:
+            try:
+                opts.append(_fmt_bar_um(float(v)))
+            except (ValueError, TypeError):
+                continue
+        return opts
+
+    def _sb_len_um(self):
+        """Selected scale-bar length as 'Auto' or a float µm, parsing the mm/µm label."""
+        sel = self.sb_len.get()
+        if sel in ("", "Auto"):
+            return "Auto"
+        parts = sel.split()
+        try:
+            v = float(parts[0])
+        except (ValueError, IndexError):
+            return "Auto"
+        return v * 1000.0 if (len(parts) > 1 and parts[1] == "mm") else v
+
     def _live_bar_um(self, source: str, px_um: float, ax) -> float:
         """The bar length in µm for *source*: the chosen fixed length, or — for 'Auto' —
         a nice value snapped to the CURRENT view width (so it tracks zoom like export does)."""
-        sel = self.sb_len.get()
-        if sel not in ("", "Auto"):
-            try:
-                return float(sel)
-            except ValueError:
-                pass
+        sel = self._sb_len_um()
+        if sel != "Auto":
+            return float(sel)
         x0, x1 = ax.get_xlim()
         vis_px = max(1, int(round(abs(x1 - x0))))
         target = 1000.0 if source == "thumb" else 200.0   # match the export presets
@@ -1423,7 +1445,7 @@ class PreviewWindow(tk.Toplevel):
         try:
             written = preview.export_roi(
                 rgb, px_um, base, order=order, formats=(fmt,),
-                scalebar_um=self.sb_len.get(), scalebar_pos=_SB_POS[self.sb_pos.get()],
+                scalebar_um=self._sb_len_um(), scalebar_pos=_SB_POS[self.sb_pos.get()],
                 scalebar_label=self.sb_label.get(), wb=True, target_um=target,
                 wb_bright_frac=self.cfg.whitebalance.bright_frac,
                 wb_target=self.cfg.whitebalance.target)

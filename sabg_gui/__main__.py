@@ -4,7 +4,7 @@ A thin front-end over the CLI (`python -m sabg_analyzer ...`). It does not impor
 the heavy pipeline; each action runs the CLI in a subprocess and streams its
 output into the log pane, so the window stays responsive.
 
-Launch:  python sabg_gui.py        (or double-click SABG_Analyzer.bat)
+Launch:  python -m sabg_gui        (or double-click SABG_Analyzer.bat)
 
 Buttons
   Data / Output  - browse to the .czi data folder and the output folder
@@ -38,7 +38,7 @@ from tkinter import filedialog, messagebox, scrolledtext
 
 from sabg_analyzer import __version__   # cheap: package __init__ only defines the version
 
-MAIN_DIR = Path(__file__).resolve().parent          # contains the sabg_analyzer package
+MAIN_DIR = Path(__file__).resolve().parent.parent   # repo root (holds sabg_analyzer, README, config)
 DEFAULT_DATA = (MAIN_DIR.parent / "data").resolve()
 DEFAULT_OUT = (MAIN_DIR.parent / "outputs").resolve()
 README = MAIN_DIR / "README.md"
@@ -331,7 +331,7 @@ class App:
         out.mkdir(parents=True, exist_ok=True)
         cfg = out / "config.yaml"
         try:
-            from sabg_info_config import ConfigWindow
+            from .info_config import ConfigWindow
             ConfigWindow(self.root, str(cfg), str(EXAMPLE_CFG))
             self._log("[gui] opened Config window")
         except Exception as exc:
@@ -360,7 +360,7 @@ class App:
             shutil.copyfile(EXAMPLE_CFG, cfg)
             self._log(f"[gui] created {cfg} from config.example.yaml")
         try:
-            from sabg_preview_gui import PreviewWindow
+            from .preview_gui import PreviewWindow
             PreviewWindow(self.root, self.data_var.get(), str(out), str(cfg))
             self._log("[gui] opened Preview/Tune window")
         except Exception as exc:
@@ -382,7 +382,7 @@ class App:
         out = Path(self.out_var.get())
         cfg = out / "config.yaml"
         try:
-            from sabg_info_config import InfoWindow
+            from .info_config import InfoWindow
             InfoWindow(self.root, self.data_var.get(), str(out), str(cfg))
             self._log("[gui] opened Info window")
         except Exception as exc:

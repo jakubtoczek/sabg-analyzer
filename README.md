@@ -77,7 +77,7 @@ Double-click **`SABG_Analyzer.bat`**, or:
 
 ```powershell
 cd C:\Code\SABG_analyzer\main
-python sabg_gui.py
+python -m sabg_gui
 ```
 
 Then, top to bottom:
@@ -322,9 +322,10 @@ opponent) · `threshold` (robust auto threshold) · `masks` (shared per-ROI mask
 by batch **and** preview, so they can't drift) · `overlay` (QC images) · `pipeline`
 (orchestration) · `export` (FOV figures) · `preview` (in-process engine for the interactive
 tuner) · `whitebalance` · `metadata` (sections.csv) · `progress` · `config` · `cli` ·
-`sabg_gui.py` (main Tkinter front-end) · `sabg_preview_gui.py` (interactive Preview/ROI
-tuner) · `sabg_gui_widgets.py` (shared widgets: layers panel, detection sections, sliders) ·
-`sabg_info_config.py` (Info + Config windows).
+The Tkinter front-end is the **`sabg_gui/`** package (run `python -m sabg_gui`):
+`sabg_gui/__main__.py` (main window) · `sabg_gui/preview_gui.py` (interactive Preview/ROI
+tuner) · `sabg_gui/widgets.py` (shared widgets: layers panel, detection sections, sliders) ·
+`sabg_gui/info_config.py` (Info + Config windows).
 
 ## License
 [MIT](LICENSE) © 2026 Jakub Toczek.

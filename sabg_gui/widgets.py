@@ -484,6 +484,8 @@ PROGRESS_FIELDS = [
 GUI_FIELDS = [
     ("gui", "preview_roi_cap_um", "float", "preview_roi_cap_um", "Preview ROI draw cap (µm)."),
     ("gui", "info_opens", "list", "info_opens", "What the Info button opens (comma separated: sections, labels, thumbs)."),
+    ("gui", "scalebar_values", "list", "scalebar_values",
+     "Preview scale-bar length presets in µm (comma separated, e.g. 10000, 1000, 100, 10)."),
 ]
 PATHS_FIELDS = [
     ("paths", "data_dir", "str", "data_dir", "Default data folder (blank = ../data)."),
@@ -888,8 +890,9 @@ class _AlphaControl:
         self._on_change = on_change
         self._guard = False
         self.var = tk.DoubleVar(value=float(init))
+        # shorter slider (was 90) so the wider layer-label column fits without growing the panel
         self.scale = ttk.Scale(parent, from_=0.0, to=1.0, variable=self.var,
-                               command=self._from_scale, length=90)
+                               command=self._from_scale, length=64)
         self.entry_var = tk.StringVar(value=f"{float(init):.2f}")
         self.entry = tk.Entry(parent, textvariable=self.entry_var, width=5)
         self.entry.bind("<Return>", self._from_entry)
@@ -929,7 +932,8 @@ def build_layers_panel(parent, cfg, show_vars: dict, on_change: Callable) -> Non
         show_vars[key] = sv
         tk.Checkbutton(parent, variable=sv, command=on_change).grid(
             row=i, column=0, sticky="w")
-        tk.Label(parent, text=LAYER_LABELS[key], anchor="w", width=12).grid(
+        # width 16 fits the longest label ("candidate SABG+") without clipping the "+".
+        tk.Label(parent, text=LAYER_LABELS[key], anchor="w", width=16).grid(
             row=i, column=1, sticky="w")
 
         swatch = tk.Button(parent, width=2, relief="raised",
