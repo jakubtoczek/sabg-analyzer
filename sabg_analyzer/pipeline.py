@@ -42,6 +42,21 @@ from .threshold import ScoreHistogram, compute_threshold
 # ---------------------------------------------------------------------------
 # scan: detect sections, extract label + thumbnails, write metadata template
 # ---------------------------------------------------------------------------
+def _clean_thumb(rgb: np.ndarray) -> np.ndarray:
+    """Hide the pure-black border the CZI returns for the unscanned parts of a scene's
+    bounding rectangle (otherwise the saved thumbnail has black edges, especially on the
+    left where the mosaic doesn't fill the bbox). The unscanned canvas reads as ~0 in every
+    channel; fill it with the slide's glass tone so it blends with the background. Cosmetic
+    (thumbnail only) -- analysis reads full-res tiles and gates tissue independently."""
+    out = rgb.copy()
+    unscanned = out.max(axis=2) <= 6
+    scanned = ~unscanned
+    if unscanned.any() and scanned.any():
+        glass = np.percentile(out[scanned], 92, axis=0).astype(out.dtype)  # bright background
+        out[unscanned] = glass
+    return out
+
+
 def scan(data_dir: str | Path, out_dir: str | Path, cfg: Config) -> Path:
     out_dir = Path(out_dir)
     thumbs_dir = out_dir / "thumbs"
@@ -80,7 +95,7 @@ def scan(data_dir: str | Path, out_dir: str | Path, cfg: Config) -> Path:
                     doc, s, max_edge=cfg.thumb_max_edge, zoom_cap=1.0,
                     um_per_px=cfg.thumb_um_per_px)
                 tp = thumbs_dir / f"{s.slug}.png"
-                overlay.save_rgb(tp, ov)
+                overlay.save_rgb(tp, _clean_thumb(ov))
                 thumb_rel[s.slug] = str(tp.relative_to(out_dir).as_posix())
                 written.append(tp)
                 dims = f"{s.w}x{s.h}px"
