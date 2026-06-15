@@ -401,13 +401,16 @@ class PreviewWindow(tk.Toplevel):
         size_data = bar_um / px_um
         y0, y1 = ax.get_ylim()
         size_vertical = max(abs(y1 - y0) * 0.006, size_data * 1e-3)
-        label = _fmt_bar_um(bar_um) if self.sb_label.get() else ""
+        # White backing plate only when a label is drawn; a bare bar shows no square.
+        label_on = bool(self.sb_label.get())
+        label = _fmt_bar_um(bar_um) if label_on else ""
         loc = _SB_LOC.get(_SB_POS.get(self.sb_pos.get(), "br"), "lower right")
         bar = AnchoredSizeBar(
             ax.transData, size_data, label, loc, pad=0.3, borderpad=0.5, sep=3,
-            color="black", frameon=True, size_vertical=size_vertical,
+            color="black", frameon=label_on, size_vertical=size_vertical,
             label_top=True, fontproperties=FontProperties(size=8))
-        bar.patch.set(facecolor="white", edgecolor="none", alpha=0.7)
+        if label_on:
+            bar.patch.set(facecolor="white", edgecolor="none", alpha=0.7)
         ax.add_artist(bar)
         self._sb_live_artist[source] = bar
         canvas.draw_idle()
@@ -749,9 +752,14 @@ class PreviewWindow(tk.Toplevel):
         self.dirty_dot = tk.Label(row1, text="✓ up to date", fg="#3a7d44",
                                   font=("Segoe UI", 9, "bold"))
         self.dirty_dot.pack(side="left", padx=4)
+        # row 2: the two batch/config actions share one line to save vertical space.
         row2 = tk.Frame(top)
         row2.pack(fill="x", pady=(4, 0))
-        tk.Button(row2, text="Export → config", command=self.on_export).pack(side="left")
+        tk.Button(row2, text="Export → config", command=self.on_export).pack(
+            side="left", fill="x", expand=True)
+        tk.Button(row2, text="▣  Compute whole section…",
+                  command=self.on_compute_section).pack(side="left", fill="x", expand=True,
+                                                        padx=(4, 0))
 
         # result characteristics (filled after each recompute / whole-section run)
         res = tk.LabelFrame(body, text="Result", padx=6, pady=2)
@@ -766,10 +774,6 @@ class PreviewWindow(tk.Toplevel):
                                     font=("Segoe UI", 8), fg="#888")
         self.result_meta.pack(fill="x")
 
-        # whole-section compute (real analyze_scene; heavy) -> caches + section stats
-        tk.Button(body, text="▣  Compute whole section…",
-                  command=self.on_compute_section).pack(fill="x", padx=6, pady=(1, 2))
-
         # layers panel (show / colour / alpha per layer); enabled on the ROI tab only
         lay = tk.LabelFrame(body, text="Layers (ROI overlay)", padx=6, pady=2)
         lay.pack(fill="x", padx=6, pady=2)
@@ -781,10 +785,10 @@ class PreviewWindow(tk.Toplevel):
         # "details" expander. The per-ROI seed threshold lives in the SABG section.
         gw.build_detection_sections(
             body, self.cfg, self.field_vars, self._on_field, recompute=True,
-            section_extra={"4. SABG detection": self._build_seed_controls})
+            section_extra={"3. SABG detection": self._build_seed_controls})
 
     def _build_seed_controls(self, parent: tk.Frame) -> None:
-        """Per-ROI seed-threshold controls, injected into "4. SABG detection". Auto
+        """Per-ROI seed-threshold controls, injected into "3. SABG detection". Auto
         (default) estimates the seed on the current ROI's tissue; untick to type a
         manual seed (persisted as scenes.<key>.threshold on Export → config)."""
         tk.Checkbutton(parent, text="Seed: Auto on ROI", variable=self.manual_auto,

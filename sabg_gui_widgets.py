@@ -312,15 +312,17 @@ EDGE_FIELDS = [
 ]
 
 # (title, fields, description) -- the detection groups, shared by Preview + Config.
+# Order mirrors the Layers panel (SABG detection sits above fold/edge), not the strict
+# pipeline order; the pipeline runs in its own fixed sequence regardless of this list.
 DETECTION_GROUPS = [
     ("1. Tissue", TISSUE_FIELDS,
      "Separate stained tissue from glass / black mosaic gaps; clean and reclaim faint interior tissue."),
     ("2. Artifact / dark folds", ARTIFACT_FIELDS,
      "Flag dark, non-teal fold/debris pixels and exclude them from counting."),
-    ("3. Fold (linear ridges)", FOLD_FIELDS,
-     "Detect thin linear tissue folds and optionally drop them from the denominator."),
-    ("4. SABG detection", DETECT_FIELDS,
+    ("3. SABG detection", DETECT_FIELDS,
      "Threshold the SABG score on tissue, then grow seeds into connected faint teal."),
+    ("4. Fold (linear ridges)", FOLD_FIELDS,
+     "Detect thin linear tissue folds and optionally drop them from the denominator."),
     ("5. Edge-shadow rejection", EDGE_FIELDS,
      "Reject thin dark edge-shadow rims wrongly counted as positive."),
 ]
@@ -364,15 +366,15 @@ LAYER_PANEL_SPEC = ([s for s in LAYER_SPEC if s[0] == "excluded"]
 # defaults landed (threshold.scale 0.825->0.70); each (v0, v100) midpoint = the program
 # default for that knob. The raw entry still accepts values beyond the slider span.
 SLIDER_LAYERS = [
-    ("tissue", [("tissue", "texture_min", 0.008, 0.001, "texture_min"),   # center 0.0045
-                ("tissue", "bg_margin", 0.146, 0.026, "bg_margin")]),     # center 0.086
-    ("SABG+", [("threshold", "scale", 0.90, 0.50, "threshold.scale"),     # center 0.70 (cfg07)
-               ("detection", "hyst_low_scale", 0.80, 0.20, "hyst_low_scale")]),  # center 0.50
-    ("artifact", [("artifact", "dark_level", 0.30, 0.60, "dark_level")]),  # center 0.45
-    ("fold", [("fold", "score_min", 0.09, 0.01, "score_min")]),            # center 0.05
+    ("tissue", [("tissue", "texture_min", 0.009, 0.0, "texture_min"),     # center 0.0045
+                ("tissue", "bg_margin", 0.16, 0.012, "bg_margin")]),      # center 0.086
+    ("SABG+", [("threshold", "scale", 1.00, 0.40, "threshold.scale"),     # center 0.70 (cfg07)
+               ("detection", "hyst_low_scale", 0.95, 0.05, "hyst_low_scale")]),  # center 0.50
+    ("artifact", [("artifact", "dark_level", 0.25, 0.65, "dark_level")]),  # center 0.45
+    ("fold", [("fold", "score_min", 0.10, 0.0, "score_min")]),             # center 0.05
     # edge teal_keep RISES with the slider so right = reject MORE (was inverted at
     # 0.20->0.02, which made slider-right reject LESS, opposite of artifact/fold).
-    ("edge-reject", [("edge", "teal_keep", 0.02, 0.16, "teal_keep")]),     # center 0.09
+    ("edge-reject", [("edge", "teal_keep", 0.01, 0.17, "teal_keep")]),     # center 0.09
 ]
 
 
@@ -669,8 +671,8 @@ def apply_field(cfg, section: str, attr: str, kind: str, var: tk.Variable) -> bo
 SECTION_SLIDERS = {
     "1. Tissue": "tissue",
     "2. Artifact / dark folds": "artifact",
-    "3. Fold (linear ridges)": "fold",
-    "4. SABG detection": "SABG+",
+    "3. SABG detection": "SABG+",
+    "4. Fold (linear ridges)": "fold",
     "5. Edge-shadow rejection": "edge-reject",
 }
 _SLIDER_KNOBS_BY_LABEL = dict(SLIDER_LAYERS)        # label -> [(section, attr, v0, v100, klab), ...]
@@ -808,7 +810,7 @@ def build_detection_sections(parent, cfg, field_vars: dict, on_change: Callable,
     with the full raw parameters behind a collapsed **details** expander.
 
     *section_extra* maps a group title -> ``callable(frame)`` to inject extra controls
-    (e.g. the per-ROI seed threshold into "4. SABG detection"). The raw rows are built
+    (e.g. the per-ROI seed threshold into "3. SABG detection"). The raw rows are built
     first so ``field_vars`` is populated before the composite slider wires to it."""
     section_extra = section_extra or {}
     out = []

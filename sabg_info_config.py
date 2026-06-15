@@ -406,7 +406,7 @@ class ConfigWindow(tk.Toplevel):
         gw.build_layers_panel(lay, self.cfg, self.show_vars, lambda: None)
         gw.build_groups(t1.interior, self.cfg, gw.DETECTION_GROUPS, self.field_vars,
                         self._on_field, recompute=False,
-                        opened={"1. Tissue", "4. SABG detection"})
+                        opened={"1. Tissue", "3. SABG detection"})
 
         t2 = gw.ScrollFrame(nb)
         nb.add(t2, text="Other settings")
