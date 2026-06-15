@@ -3,7 +3,9 @@
 Quantify **SA-β-Gal (SABG) positive area** in brightfield CZI whole-slide images of
 murine A549 tumor tissue (untreated vs. senescence-inducing treatment at 3 / 7 days).
 
-_Version & history: [`CHANGELOG.md`](CHANGELOG.md) — Semantic Versioning, pre-1.0 (beta)._
+_Versioning: Semantic Versioning, pre-1.0 (beta); the version tracks accumulated capability, not
+session count. The canonical change record is the git commit log; a human-readable digest is kept
+locally in the sibling `../misc/CHANGELOG.md` (outside the repo)._
 
 For each tissue section:
 
@@ -21,7 +23,9 @@ For each tissue section:
 
 Inspecting the example slides revealed several facts that drive the whole design:
 
-1. **The SABG signal is faint, punctate teal/cyan** — only ~0.6–1 % of tissue area.
+1. **The SABG signal is faint, punctate teal/cyan** — typically on the order of a percent of
+   tissue area (more on heavily-stained sections, and the figure shifts with detection tuning and
+   with how much non-target tissue is excised). It is a small fraction either way.
    Downsampling destroys it: at 0.08× zoom the positive pixels (~24 600) dropped to **0**.
    ⇒ Quantification runs at **full resolution, in tiles**. Heavy downsampling is invalid
    (`process_zoom` floor ≈ 0.3; default 1.0).
@@ -321,3 +325,6 @@ tuner) · `whitebalance` · `metadata` (sections.csv) · `progress` · `config` 
 `sabg_gui.py` (main Tkinter front-end) · `sabg_preview_gui.py` (interactive Preview/ROI
 tuner) · `sabg_gui_widgets.py` (shared widgets: layers panel, detection sections, sliders) ·
 `sabg_info_config.py` (Info + Config windows).
+
+## License
+[MIT](LICENSE) © 2026 Jakub Toczek.
