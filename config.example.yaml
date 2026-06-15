@@ -150,8 +150,10 @@ detection:
   # false = plain single-threshold (the seed level only).
   hysteresis: true
   hyst_low_scale: 0.5    # grow/low threshold = (seed threshold) x this  (lower = grow further)
-  hyst_teal_min: 0.04    # only grow into pixels at least this teal (opponent); stops growth
+  hyst_teal_min: 0.02    # only grow into pixels at least this teal (opponent); stops growth
                          # bleeding into achromatic edges / blank tissue. 0 = grow into any.
+                         # 0.02 = session-16 tuning default (cfg06/cfg07; lifts faint treated
+                         # teal, negatives held at floor). 0.01 is the aggressive cfg09 option.
 
   # Grow the final SABG+ mask by this many px (after the edge filter) to recover
   # faint staining trimmed by a conservative threshold. 0 = off.
@@ -159,7 +161,7 @@ detection:
   # ...but only grow into pixels at least this teal (opponent score), so the dilation
   # follows real teal rather than bleeding into achromatic cell edges / blank tissue.
   # 0 = grow into any tissue (old behaviour).
-  expand_teal_min: 0.04
+  expand_teal_min: 0.02   # session-16 tuning default (matches hyst_teal_min)
 
   # Color-deconvolution stain vectors in RGB optical-density space.
   # Row 0 = SABG (teal/cyan), row 1 = tissue counterstain, row 2 = residual.
@@ -179,7 +181,9 @@ threshold:
   percentile: 99.0     # used when method == percentile
   value: null          # used when method == fixed
   min_score: 0.0       # never threshold below this (guardrail against noise)
-  scale: 0.825         # multiply the auto threshold (<1 = more sensitive; 1 = off).
+  scale: 0.70          # multiply the auto threshold (<1 = more sensitive; 1 = off).
+                       # 0.70 = session-16 tuning default (cfg07): a free win over the old
+                       # 0.825 — every treated section rose, negatives stayed flat.
                        # With detection.hysteresis on this is the SEED (high) threshold:
                        # keep it fairly strict; the hysteresis grow step recovers faint
                        # teal that is CONNECTED to a seed (lower=more seeds; raise=fewer).
@@ -263,8 +267,9 @@ gui:
   # Default flips to candidate-on / SABG-off (audit the pre-rejection teal first).
   layer_defaults: {sabg_candidate: true, sabg: false}
   # Info viewer: default slide-label rotation in 90° CCW quarter-turns (0-3). Labels are
-  # scanned sideways, so 1 = upright by default; set 0 to disable. Rotate buttons compose.
-  label_rotate_quarter_turns: 1
+  # scanned sideways; 3 = upright with the text reading the intended way (1 was upside-down
+  # relative to that, i.e. 180° off). Set 0 to disable; the rotate buttons still compose.
+  label_rotate_quarter_turns: 3
 
 # ---- Section alias (used in results.csv + every output filename) ----------
 # Each section gets a short, human-readable id built from the sections.csv

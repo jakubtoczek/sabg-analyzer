@@ -21,7 +21,8 @@ class ThresholdParams:
     percentile: float = 99.0
     value: float | None = None
     min_score: float = 0.0
-    scale: float = 0.825       # multiply the auto threshold (<1 = more sensitive).
+    scale: float = 0.70        # multiply the auto threshold (<1 = more sensitive).
+    #   0.70 = session-16 tuning default (cfg07; was 0.825).
     #   With hysteresis on (detection.hysteresis) this is the SEED/high threshold:
     #   keep it fairly strict (~0.8-0.9) and let the hysteresis grow recover faint teal.
     from_overview: bool = False  # derive threshold from the in-memory overview

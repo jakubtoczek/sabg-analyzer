@@ -33,9 +33,10 @@ class DetectionParams:
     # counted, so punctate signal is never lost. False = plain single-threshold.
     hysteresis: bool = True
     hyst_low_scale: float = 0.5             # grow/low threshold = seed threshold x this
-    hyst_teal_min: float = 0.04             # only grow into pixels at least this teal (opponent)
+    hyst_teal_min: float = 0.02             # only grow into pixels at least this teal (opponent)
+    #                                         0.02 = session-16 tuning default (cfg07; was 0.04)
     expand_px: int = 2                      # dilate the final positive mask by this many px
-    expand_teal_min: float = 0.04           # only grow into pixels this teal (opponent);
+    expand_teal_min: float = 0.02           # only grow into pixels this teal (opponent);
                                             # keeps growth on real teal, not edges/tissue.
                                             # 0 = grow into any tissue (old behaviour)
 
@@ -129,9 +130,9 @@ class GuiParams:
     layer_defaults: dict[str, bool] = field(
         default_factory=lambda: {"sabg_candidate": True, "sabg": False})
     # Info viewer: default rotation of the slide-label image, in 90° counter-clockwise
-    # quarter-turns (0-3). Labels are scanned sideways, so 1 = upright by default; the
-    # in-viewer rotate buttons still compose on top of this and reset per section.
-    label_rotate_quarter_turns: int = 1
+    # quarter-turns (0-3). Labels are scanned sideways; 3 = upright the intended way (1 was
+    # 180° off / upside-down). The in-viewer rotate buttons compose on top and reset per section.
+    label_rotate_quarter_turns: int = 3
 
 
 @dataclass
