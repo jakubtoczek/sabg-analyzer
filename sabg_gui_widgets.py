@@ -180,12 +180,16 @@ class CanvasNav:
     the exclusion brush is active. Defaults to always-on (Info viewers, ROI tab).
     """
 
-    def __init__(self, canvas, ax, can_left_pan=None) -> None:
+    def __init__(self, canvas, ax, can_left_pan=None, on_view_change=None) -> None:
         self.canvas = canvas
         self.ax = ax
         self._home = None
         self._panning = False
         self._can_left_pan = can_left_pan
+        # Optional no-arg callback fired after the view EXTENT changes (wheel-zoom +
+        # Reset view). Used by the Preview to rescale a live scale bar. Pan is excluded:
+        # a corner-anchored overlay stays put and only needs the normal redraw.
+        self._on_view_change = on_view_change
         canvas.mpl_connect("scroll_event", self._zoom)
         canvas.mpl_connect("button_press_event", self._press)
         canvas.mpl_connect("motion_notify_event", self._drag)
@@ -201,6 +205,8 @@ class CanvasNav:
         if self._home is not None:
             self.ax.set_xlim(*self._home[0])
             self.ax.set_ylim(*self._home[1])
+            if self._on_view_change is not None:
+                self._on_view_change()
             self.canvas.draw_idle()
 
     def _zoom(self, e) -> None:
@@ -212,6 +218,8 @@ class CanvasNav:
         xd, yd = e.xdata, e.ydata
         self.ax.set_xlim(xd - (xd - x0) * scale, xd + (x1 - xd) * scale)
         self.ax.set_ylim(yd - (yd - y0) * scale, yd + (y1 - yd) * scale)
+        if self._on_view_change is not None:
+            self._on_view_change()
         self.canvas.draw_idle()
 
     def _press(self, e) -> None:
@@ -351,17 +359,20 @@ LAYER_PANEL_SPEC = ([s for s in LAYER_SPEC if s[0] == "excluded"]
 # right = strip more positives. e.g. texture_min DROPS as detection rises; edge
 # teal_keep RISES as rejection rises (a higher teal_keep protects FEWER pixels, so
 # rejects more). The first knob drives the slider position; the rest follow.
-# Mappings + ranges per the session-7 handover §8 (centred on the config defaults).
+# Ranges are CENTRED on the config defaults so each slider opens at the midpoint (50)
+# when the parameter sits at its default. Recentred in session 17 after the cfg07 tuning
+# defaults landed (threshold.scale 0.825->0.70); each (v0, v100) midpoint = the program
+# default for that knob. The raw entry still accepts values beyond the slider span.
 SLIDER_LAYERS = [
-    ("tissue", [("tissue", "texture_min", 0.012, 0.001, "texture_min"),
-                ("tissue", "bg_margin", 0.16, 0.04, "bg_margin")]),
-    ("SABG+", [("threshold", "scale", 1.30, 0.50, "threshold.scale"),
-               ("detection", "hyst_low_scale", 0.90, 0.20, "hyst_low_scale")]),
-    ("artifact", [("artifact", "dark_level", 0.30, 0.60, "dark_level")]),
-    ("fold", [("fold", "score_min", 0.15, 0.02, "score_min")]),
+    ("tissue", [("tissue", "texture_min", 0.008, 0.001, "texture_min"),   # center 0.0045
+                ("tissue", "bg_margin", 0.146, 0.026, "bg_margin")]),     # center 0.086
+    ("SABG+", [("threshold", "scale", 0.90, 0.50, "threshold.scale"),     # center 0.70 (cfg07)
+               ("detection", "hyst_low_scale", 0.80, 0.20, "hyst_low_scale")]),  # center 0.50
+    ("artifact", [("artifact", "dark_level", 0.30, 0.60, "dark_level")]),  # center 0.45
+    ("fold", [("fold", "score_min", 0.09, 0.01, "score_min")]),            # center 0.05
     # edge teal_keep RISES with the slider so right = reject MORE (was inverted at
     # 0.20->0.02, which made slider-right reject LESS, opposite of artifact/fold).
-    ("edge-reject", [("edge", "teal_keep", 0.02, 0.20, "teal_keep")]),
+    ("edge-reject", [("edge", "teal_keep", 0.02, 0.16, "teal_keep")]),     # center 0.09
 ]
 
 
@@ -670,12 +681,14 @@ _SLIDER_KNOBS_BY_LABEL = dict(SLIDER_LAYERS)        # label -> [(section, attr, 
 REJECT_SLIDER_LABELS = {"artifact", "fold", "edge-reject"}
 
 
-def _add_composite_slider(parent, knobs, field_vars: dict, reject: bool = False) -> None:
+def _add_composite_slider(parent, knobs, field_vars: dict, reject: bool = False,
+                          extra_tip: str = "") -> None:
     """One 0-100 slider driving EVERY knob in *knobs* together. Detection stages read
     left = detect less, right = detect more; *reject* stages (artifact/fold/edge) read
     left = reject less, right = reject more. Each knob's field var must already be in
     *field_vars* (build the raw rows first). Editing the primary (first) knob re-derives
-    the slider position; a guard breaks the slider<->entry feedback loop."""
+    the slider position; a guard breaks the slider<->entry feedback loop. *extra_tip* is
+    appended to the slider tooltip (the stage description, now off the always-visible area)."""
     guard = {"on": False}
     sv = tk.DoubleVar()
     p_sec, p_attr, p_v0, p_v100 = knobs[0][0], knobs[0][1], knobs[0][2], knobs[0][3]
@@ -727,12 +740,14 @@ def _add_composite_slider(parent, knobs, field_vars: dict, reject: bool = False)
     tk.Label(parent, text=left_txt, fg="#888", font=("Segoe UI", 7)).grid(
         row=0, column=0, sticky="e")
     scale = ttk.Scale(parent, from_=0, to=100, variable=sv, command=from_slider,
-                      length=150)
+                      length=110)
     scale.grid(row=0, column=1, sticky="ew", padx=3)
     tk.Label(parent, text=right_txt, fg="#888", font=("Segoe UI", 7)).grid(
         row=0, column=2, sticky="w")
     # The "sensitivity"/"strength" sub-label was dropped (G2 compact-panel): it added a
     # whole row per stage for no information the end-labels + tooltip don't already give.
+    if extra_tip:
+        tip = f"{tip}\n\n{extra_tip}"
     Tooltip(scale, tip)                  # hover help on the slider itself (B4)
     parent.columnconfigure(1, weight=1)
     if primary_var is not None:
@@ -798,36 +813,33 @@ def build_detection_sections(parent, cfg, field_vars: dict, on_change: Callable,
     section_extra = section_extra or {}
     out = []
     for title, fields, desc in DETECTION_GROUPS:
-        sec = tk.LabelFrame(parent, text=title, padx=3, pady=2)
-        sec.pack(fill="x", expand=True, pady=2)
-        # header row: per-stage "Reset" restoring this stage's displayed fields to the
-        # program defaults (packed first so it sits at the stage's top-right).
-        hdr = tk.Frame(sec)
-        hdr.pack(fill="x")
-        rbtn = tk.Button(hdr, text="Reset", font=("Segoe UI", 7), padx=4, pady=0,
-                         command=lambda f=fields: _reset_section_fields(
-                             cfg, f, field_vars, on_change, recompute))
-        rbtn.pack(side="right")
-        Tooltip(rbtn, "Reset this stage's settings to the program defaults.")
-        if desc:
-            tk.Label(sec, text=desc, fg="#666", font=("Segoe UI", 7),
-                     wraplength=320, justify="left", anchor="w").pack(fill="x")
-        # details expander -- built first (populates field_vars) but packed last so it
-        # sits below the slider/extra controls.
-        det = CollapsibleFrame(sec, "details", opened=False)
+        sec = tk.LabelFrame(parent, text=title, padx=3, pady=1)
+        sec.pack(fill="x", expand=True, pady=1)
+        # Compact (session 17): the per-stage description moved INTO the details expander
+        # (and onto the slider tooltip) so the always-visible part of each stage is just one
+        # row -- the composite slider + an inline "Reset" -- letting all 5 stages fit at
+        # 1320x840 with details collapsed. The expander is built first so field_vars is
+        # populated before the slider wires to it, but packed last (below the slider row).
+        det = CollapsibleFrame(sec, "details", description=desc, opened=False)
         Tooltip(det._btn, "Show or hide this stage's raw parameters.")
         grid = tk.Frame(det.body, padx=2, pady=2)
         grid.pack(fill="x")
         build_field_rows(grid, cfg, fields, field_vars, on_change, recompute,
                          sensitivity=False)
+        # one always-visible row: composite sensitivity slider (cols 0-2) + Reset (col 3).
+        srow = tk.Frame(sec, padx=2)
+        srow.pack(fill="x", pady=(1, 0))
         if title in SECTION_SLIDERS:
             slabel = SECTION_SLIDERS[title]
             knobs = _SLIDER_KNOBS_BY_LABEL.get(slabel)
             if knobs:
-                srow = tk.Frame(sec, padx=2)
-                srow.pack(fill="x", pady=(1, 0))
                 _add_composite_slider(srow, knobs, field_vars,
-                                      reject=slabel in REJECT_SLIDER_LABELS)
+                                      reject=slabel in REJECT_SLIDER_LABELS, extra_tip=desc)
+        rbtn = tk.Button(srow, text="Reset", font=("Segoe UI", 7), padx=4, pady=0,
+                         command=lambda f=fields: _reset_section_fields(
+                             cfg, f, field_vars, on_change, recompute))
+        rbtn.grid(row=0, column=3, sticky="e", padx=(4, 0))
+        Tooltip(rbtn, "Reset this stage's settings to the program defaults.")
         if title in section_extra:
             ex = tk.Frame(sec, padx=2)
             ex.pack(fill="x", pady=(1, 0))
