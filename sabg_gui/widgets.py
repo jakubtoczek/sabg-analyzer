@@ -327,16 +327,17 @@ DETECTION_GROUPS = [
      "Reject thin dark edge-shadow rims wrongly counted as positive."),
 ]
 
-# Layers in composite DRAW order (bottom -> top; last = on top). The order traces the
-# pipeline: exclusion masks first, then the pre-rejection candidate, the fold/edge
-# rejections, and finally SABG+ painted over everything so the kept positives stay visible.
-# (key, colour attr, alpha attr, default show).
+# Layers in composite DRAW order (bottom -> top; last = on top). `sabg_candidate` is the
+# pre-rejection positive set (computed BEFORE fold/edge exclusion), so it is painted ON TOP
+# of the fold band — you see the detected positives over a fold, with the orange band showing
+# through where there were none. `edge_removed` (the edge-rejected positives) and the final
+# `sabg` stay above it so they remain visible. (key, colour attr, alpha attr, default show).
 LAYER_SPEC = [
     ("nontissue", "nontissue_color", "nontissue_alpha", True),
     ("excluded", "excluded_color", "excluded_alpha", True),
     ("artifact", "artifact_color", "artifact_alpha", True),
-    ("sabg_candidate", "sabg_candidate_color", "sabg_candidate_alpha", False),
     ("fold", "fold_color", "fold_alpha", True),
+    ("sabg_candidate", "sabg_candidate_color", "sabg_candidate_alpha", False),
     ("edge_removed", "edge_color", "edge_alpha", True),
     ("sabg", "sabg_color", "sabg_alpha", True),
 ]
@@ -344,12 +345,13 @@ LAYER_LABELS = {"nontissue": "non-tissue", "excluded": "excluded", "artifact": "
                 "fold": "fold", "sabg_candidate": "candidate SABG+", "sabg": "SABG+",
                 "edge_removed": "edge-rejected"}
 
-# The Layers *panel* lists 'excluded' above 'non-tissue' (Jakub's preference); this is
-# display order only. The overlay COMPOSITE order stays `LAYER_SPEC` (non-tissue first,
-# excluded painted on top of it), so reordering the panel can't hide excluded where the
-# two masks overlap.
-LAYER_PANEL_SPEC = ([s for s in LAYER_SPEC if s[0] == "excluded"]
-                    + [s for s in LAYER_SPEC if s[0] != "excluded"])
+# The Layers *panel* lists layers in PIPELINE/PROCESSING order (manual exclusion, non-tissue,
+# artifact, candidate, fold, edge, final) — decoupled from the composite z-order above, so the
+# panel reads in the order things happen while candidate still PAINTS on top of fold.
+_LAYER_BY_KEY = {s[0]: s for s in LAYER_SPEC}
+LAYER_PANEL_SPEC = [_LAYER_BY_KEY[k] for k in
+                    ("excluded", "nontissue", "artifact", "sabg_candidate",
+                     "fold", "edge_removed", "sabg")]
 
 # ---------------------------------------------------------------------------
 # "Slider setup" mode: one guided sensitivity bar per layer.
