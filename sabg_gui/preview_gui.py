@@ -1395,9 +1395,9 @@ class PreviewWindow(tk.Toplevel):
         # excluded + non-tissue OCCLUDE: detection layers are not drawn under them, so the
         # overlay shows everything except in those areas. Everything else just alpha-blends in
         # LAYER_SPEC order (overlaps stay visible — e.g. fold + artifact are not exclusive).
-        # Each layer is shown independently of the others (edge-rejected is NOT linked to the
-        # candidate layer); edge-rejected lives in tissue that already excludes folds/artifacts,
-        # so it never paints over them.
+        # Each layer is shown independently (edge-rejected is NOT linked to the candidate layer).
+        # The audit display masks (fold_disp / sabg_candidate_disp / edge_removed_disp) let
+        # candidate and edge-rejected overlap the fold band; only excluded + non-tissue occlude.
         occ = None
         for k in ("excluded", "nontissue"):
             if shown(k):

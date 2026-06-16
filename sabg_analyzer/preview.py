@@ -235,15 +235,18 @@ def compute_roi_layers(rgb: np.ndarray, cfg: Config, pixel_size_um: float | None
     # %/area stat still reads the partition masks above, so quantification is unchanged.
     fold_disp = fold if fold_band is None else (fold | (fold_band & art))   # full band, incl. artifact
     if fold_band is not None and cfg.fold.exclude_from_tissue:
-        # Re-detect on tissue that still INCLUDES the fold band, so candidate can sit over a fold.
+        # Re-detect on tissue that still INCLUDES the fold band, so BOTH the candidate and the
+        # edge-rejected audit layers can sit OVER a fold. They're computed on band-excluded tissue
+        # for counting (`t`), so without this they could never overlap the band.
         # ponytail: one extra ROI-sized pass, only when folds drop tissue; preview ROIs are capped.
         t_disp, _a, _f, _o = compute_region_masks(
             rgb, tcfg, cfg, region=region, region_c=region_c_base,
             fold_band=fold_band, opp=opp)
-        cand_disp = detect_sabg(rgb, t_disp, opp, cfg, conv, thr, thr_s, pixel_size_um,
-                                fold=fold, keep_here=None)["sabg_candidate"]
+        d_disp = detect_sabg(rgb, t_disp, opp, cfg, conv, thr, thr_s, pixel_size_um,
+                             fold=fold, keep_here=None)
+        cand_disp, edge_disp = d_disp["sabg_candidate"], d_disp["edge_removed"]
     else:
-        cand_disp = d["sabg_candidate"]
+        cand_disp, edge_disp = d["sabg_candidate"], d["edge_removed"]
 
     return {
         "tissue": t,
@@ -256,6 +259,7 @@ def compute_roi_layers(rgb: np.ndarray, cfg: Config, pixel_size_um: float | None
         "sabg_candidate_disp": cand_disp,   # overlay-only: candidate incl. fold-band detections
         "deconv": d["deconv"],                   # SABG-channel score (for the intensity readout)
         "edge_removed": d["edge_removed"],
+        "edge_removed_disp": edge_disp,     # overlay-only: edge-rejected incl. fold-band detections
         "nontissue": ~region_full,          # glass/background only (not the excluded region)
         "excluded": (exclude if exclude is not None
                      else np.zeros(region_full.shape, bool)),
