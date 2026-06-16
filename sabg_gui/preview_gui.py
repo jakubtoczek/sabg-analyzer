@@ -806,21 +806,23 @@ class PreviewWindow(tk.Toplevel):
                                     font=("Segoe UI", 8), fg="#888")
         self.result_meta.pack(fill="x")
 
+        # Detection parameters FIRST (above the layers panel). Each stage is ALWAYS open with
+        # one composite sensitivity slider (left = less, right = more); the raw parameters sit
+        # behind a per-stage "details" expander. The per-ROI seed threshold lives in SABG detection.
+        tk.Label(body, text="Detection parameters", anchor="w",
+                 font=("Segoe UI", 9, "bold")).pack(fill="x", padx=6, pady=(4, 0))
+        gw.build_detection_sections(
+            body, self.cfg, self.field_vars, self._on_field, recompute=True,
+            section_extra={"2. SABG detection": self._build_seed_controls})
+
         # layers panel (show / colour / alpha per layer); enabled on the ROI tab only
-        lay = tk.LabelFrame(body, text="Layers (ROI overlay)", padx=6, pady=2)
+        lay = tk.LabelFrame(body, text="Displayed layers (overlay)", padx=4, pady=1)
         lay.pack(fill="x", padx=6, pady=2)
         self._layers_frame = lay
         gw.build_layers_panel(lay, self.cfg, self.show_vars, self._redraw)
 
-        # Detection stages: each ALWAYS open with one composite sensitivity slider
-        # (left = detect less, right = more), the raw parameters behind a per-section
-        # "details" expander. The per-ROI seed threshold lives in the SABG section.
-        gw.build_detection_sections(
-            body, self.cfg, self.field_vars, self._on_field, recompute=True,
-            section_extra={"3. SABG detection": self._build_seed_controls})
-
     def _build_seed_controls(self, parent: tk.Frame) -> None:
-        """Per-ROI seed-threshold controls, injected into "3. SABG detection". Auto
+        """Per-ROI seed-threshold controls, injected into "2. SABG detection". Auto
         (default) estimates the seed on the current ROI's tissue; untick to type a
         manual seed (persisted as scenes.<key>.threshold on Export → config)."""
         tk.Checkbutton(parent, text="Seed: Auto on ROI", variable=self.manual_auto,
@@ -1389,20 +1391,19 @@ class PreviewWindow(tk.Toplevel):
         if self.layers is None:
             return None
         ov = self.cfg.overlay
+        # Visible layers in composite order (LAYER_SPEC = bottom -> top = priority).
+        vis = [(key, color_attr, alpha_attr)
+               for key, color_attr, alpha_attr, _d in gw.LAYER_SPEC
+               if self.show_vars[key].get() and self.layers.get(key) is not None]
         order = []
-        for idx, (key, color_attr, alpha_attr, _d) in enumerate(gw.LAYER_SPEC):
-            if not self.show_vars[key].get():
-                continue
+        for i, (key, color_attr, alpha_attr) in enumerate(vis):
             mask = self.layers[key]
-            if key == "fold" and mask is not None:
-                # Don't paint the orange fold band UNDER a higher signal layer: candidate
-                # (cyan), SABG+ (green) and edge-rejected (violet) are drawn above fold in
-                # LAYER_SPEC, but alpha-blending cyan over the strong orange just muddied it.
-                # Punch the visible upper layers out of the band so they read cleanly over it.
-                for up_key, *_ in gw.LAYER_SPEC[idx + 1:]:
-                    up = self.layers.get(up_key)
-                    if up is not None and self.show_vars[up_key].get():
-                        mask = mask & ~up
+            # Topmost-wins: punch every higher visible layer out of this one, so each layer
+            # reads as a clean colour instead of a muddy alpha stack. Per LAYER_SPEC order this
+            # puts candidate SABG+ cleanly OVER artifact/fold/edge, with excluded + non-tissue
+            # above candidate. (n<=7 layers, so the O(n^2) mask AND is trivially cheap.)
+            for hk, _ca, _aa in vis[i + 1:]:
+                mask = mask & ~self.layers[hk]
             order.append((mask, tuple(getattr(ov, color_attr)),
                           float(getattr(ov, alpha_attr))))
         return order

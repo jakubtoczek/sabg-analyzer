@@ -141,13 +141,20 @@ class CollapsibleFrame(tk.Frame):
     """
 
     def __init__(self, parent, title: str, description: str = "",
-                 opened: bool = True, **kw) -> None:
-        super().__init__(parent, relief="groove", borderwidth=1, **kw)
+                 opened: bool = True, relief: str = "groove", borderwidth: int = 1,
+                 header_left=None, **kw) -> None:
+        super().__init__(parent, relief=relief, borderwidth=borderwidth, **kw)
         self._title = title
         self._opened = bool(opened)
-        self._btn = tk.Button(self, anchor="w", relief="flat", font=("Segoe UI", 9, "bold"),
+        # header row: optional caller widget (e.g. an "enable" checkbox) on the LEFT, then
+        # the show/hide toggle button filling the rest.
+        header = tk.Frame(self)
+        header.pack(fill="x")
+        if header_left is not None:
+            header_left(header)
+        self._btn = tk.Button(header, anchor="w", relief="flat", font=("Segoe UI", 9, "bold"),
                               command=self.toggle)
-        self._btn.pack(fill="x")
+        self._btn.pack(side="left", fill="x", expand=True)
         self.body = tk.Frame(self)
         if description:
             tk.Label(self.body, text=description, anchor="w", justify="left",
@@ -312,45 +319,45 @@ EDGE_FIELDS = [
 ]
 
 # (title, fields, description) -- the detection groups, shared by Preview + Config.
-# Order mirrors the Layers panel (SABG detection sits above fold/edge), not the strict
-# pipeline order; the pipeline runs in its own fixed sequence regardless of this list.
+# Order = tissue, then SABG detection, then the rejection stages (artifact, fold, edge);
+# the pipeline runs in its own fixed sequence regardless of this list.
 DETECTION_GROUPS = [
     ("1. Tissue", TISSUE_FIELDS,
      "Separate stained tissue from glass / black mosaic gaps; clean and reclaim faint interior tissue."),
-    ("2. Artifact / dark folds", ARTIFACT_FIELDS,
-     "Flag dark, non-teal fold/debris pixels and exclude them from counting."),
-    ("3. SABG detection", DETECT_FIELDS,
+    ("2. SABG detection", DETECT_FIELDS,
      "Threshold the SABG score on tissue, then grow seeds into connected faint teal."),
+    ("3. Artifact / dark folds", ARTIFACT_FIELDS,
+     "Flag dark, non-teal fold/debris pixels and exclude them from counting."),
     ("4. Fold (linear ridges)", FOLD_FIELDS,
      "Detect thin linear tissue folds and optionally drop them from the denominator."),
     ("5. Edge-shadow rejection", EDGE_FIELDS,
      "Reject thin dark edge-shadow rims wrongly counted as positive."),
 ]
 
-# Layers in composite DRAW order (bottom -> top; last = on top). `sabg_candidate` is the
-# pre-rejection positive set (computed BEFORE fold/edge exclusion), so it is painted ON TOP
-# of the fold band — you see the detected positives over a fold, with the orange band showing
-# through where there were none. `edge_removed` (the edge-rejected positives) and the final
-# `sabg` stay above it so they remain visible. (key, colour attr, alpha attr, default show).
+# Layers in composite DRAW order (bottom -> top; last = on top). `_overlay_order` composites
+# topmost-wins (each layer is punched out from under any higher visible layer), so this order
+# IS the visual priority. Rules driven by Jakub's request: `sabg_candidate` (cyan) sits ABOVE
+# the rejection bands (artifact/fold/edge_removed) so it reads cleanly OVER them, with the final
+# `sabg` (green) on top of it; `excluded` + `nontissue` sit ABOVE candidate so candidate is NOT
+# shown over manually-excluded or non-tissue regions. (key, colour attr, alpha attr, default show).
 LAYER_SPEC = [
-    ("nontissue", "nontissue_color", "nontissue_alpha", True),
-    ("excluded", "excluded_color", "excluded_alpha", True),
     ("artifact", "artifact_color", "artifact_alpha", True),
     ("fold", "fold_color", "fold_alpha", True),
-    ("sabg_candidate", "sabg_candidate_color", "sabg_candidate_alpha", False),
     ("edge_removed", "edge_color", "edge_alpha", True),
+    ("sabg_candidate", "sabg_candidate_color", "sabg_candidate_alpha", False),
     ("sabg", "sabg_color", "sabg_alpha", True),
+    ("excluded", "excluded_color", "excluded_alpha", True),
+    ("nontissue", "nontissue_color", "nontissue_alpha", True),
 ]
 LAYER_LABELS = {"nontissue": "non-tissue", "excluded": "excluded", "artifact": "artifact",
                 "fold": "fold", "sabg_candidate": "candidate SABG+", "sabg": "SABG+",
                 "edge_removed": "edge-rejected"}
 
-# The Layers *panel* lists layers in PIPELINE/PROCESSING order (manual exclusion, non-tissue,
-# artifact, candidate, fold, edge, final) — decoupled from the composite z-order above, so the
-# panel reads in the order things happen while candidate still PAINTS on top of fold.
+# The Layers *panel* lists layers in its own order (decoupled from the composite z-order above):
+# excluded, non-tissue, candidate, artifact, fold, edge, final SABG+.
 _LAYER_BY_KEY = {s[0]: s for s in LAYER_SPEC}
 LAYER_PANEL_SPEC = [_LAYER_BY_KEY[k] for k in
-                    ("excluded", "nontissue", "artifact", "sabg_candidate",
+                    ("excluded", "nontissue", "sabg_candidate", "artifact",
                      "fold", "edge_removed", "sabg")]
 
 # ---------------------------------------------------------------------------
@@ -674,8 +681,8 @@ def apply_field(cfg, section: str, attr: str, kind: str, var: tk.Variable) -> bo
 # so a section's one sensitivity slider can drive all of its guided knobs together.
 SECTION_SLIDERS = {
     "1. Tissue": "tissue",
-    "2. Artifact / dark folds": "artifact",
-    "3. SABG detection": "SABG+",
+    "2. SABG detection": "SABG+",
+    "3. Artifact / dark folds": "artifact",
     "4. Fold (linear ridges)": "fold",
     "5. Edge-shadow rejection": "edge-reject",
 }
@@ -830,23 +837,40 @@ def build_detection_sections(parent, cfg, field_vars: dict, on_change: Callable,
     with the full raw parameters behind a collapsed **details** expander.
 
     *section_extra* maps a group title -> ``callable(frame)`` to inject extra controls
-    (e.g. the per-ROI seed threshold into "3. SABG detection"). The raw rows are built
+    (e.g. the per-ROI seed threshold into "2. SABG detection"). The raw rows are built
     first so ``field_vars`` is populated before the composite slider wires to it."""
     section_extra = section_extra or {}
     out = []
     for title, fields, desc in DETECTION_GROUPS:
-        sec = tk.LabelFrame(parent, text=title, padx=3, pady=1)
+        sec = tk.Frame(parent, padx=3, pady=1)               # borderless (was LabelFrame)
         sec.pack(fill="x", expand=True, pady=1)
+        tk.Label(sec, text=title, anchor="w", font=("Segoe UI", 9, "bold")).pack(fill="x")
         # Compact (session 17): the per-stage description moved INTO the details expander
         # (and onto the slider tooltip) so the always-visible part of each stage is just one
         # row -- the composite slider + an inline "Reset" -- letting all 5 stages fit at
         # 1320x840 with details collapsed. The expander is built first so field_vars is
         # populated before the slider wires to it, but packed last (below the slider row).
-        det = CollapsibleFrame(sec, "details", description=desc, opened=False)
+        # The 'enabled' field (artifact/fold/edge) rides the details header as a checkbox on
+        # the left instead of a body row; the rest of the raw params stay in the body.
+        enable_spec = next((f for f in fields if f[1] == "enabled"), None)
+        body_fields = [f for f in fields if f[1] != "enabled"]
+
+        def _enable_header(hdr, spec=enable_spec):
+            section, attr, kind = spec[0], spec[1], spec[2]
+            obj = getattr(cfg, section) if section else cfg
+            var = tk.BooleanVar(value=bool(getattr(obj, attr)))
+            tk.Checkbutton(hdr, text="enable", variable=var,
+                           command=lambda s=section, a=attr, k=kind:
+                           on_change(s, a, k, recompute)).pack(side="left")
+            field_vars[(section, attr)] = var
+
+        det = CollapsibleFrame(sec, "details", description=desc, opened=False,
+                               relief="flat", borderwidth=0,
+                               header_left=_enable_header if enable_spec else None)
         Tooltip(det._btn, "Show or hide this stage's raw parameters.")
         grid = tk.Frame(det.body, padx=2, pady=2)
         grid.pack(fill="x")
-        build_field_rows(grid, cfg, fields, field_vars, on_change, recompute,
+        build_field_rows(grid, cfg, body_fields, field_vars, on_change, recompute,
                          sensitivity=False)
         # one always-visible row: composite sensitivity slider (cols 0-2) + Reset (col 3).
         srow = tk.Frame(sec, padx=2)
@@ -955,19 +979,21 @@ def build_layers_panel(parent, cfg, show_vars: dict, on_change: Callable) -> Non
         tk.Label(parent, text=LAYER_LABELS[key], anchor="w", width=16).grid(
             row=i, column=1, sticky="w")
 
-        swatch = tk.Button(parent, width=2, relief="raised",
-                           bg=rgb_to_hex(getattr(ov, color_attr)))
+        # Short flat rectangle (was a full-height button) — lower-profile + more compact.
+        swatch = tk.Frame(parent, width=22, height=10, relief="raised", bd=1,
+                          bg=rgb_to_hex(getattr(ov, color_attr)), cursor="hand2")
+        swatch.grid(row=i, column=2, padx=4, pady=1)
+        swatch.grid_propagate(False)
 
-        def pick(ca=color_attr, btn=swatch):
+        def pick(_evt=None, ca=color_attr, sw=swatch):
             cur = getattr(ov, ca)
             res = colorchooser.askcolor(color=rgb_to_hex(cur), parent=parent)
             if res and res[0]:
                 setattr(ov, ca, tuple(int(c) for c in res[0]))
-                btn.configure(bg=rgb_to_hex(getattr(ov, ca)))
+                sw.configure(bg=rgb_to_hex(getattr(ov, ca)))
                 on_change()
 
-        swatch.configure(command=pick)
-        swatch.grid(row=i, column=2, padx=4)
+        swatch.bind("<Button-1>", pick)
 
         def set_alpha(v, aa=alpha_attr):
             setattr(ov, aa, float(v))
@@ -1070,8 +1096,10 @@ class _PickerHandle:
             self._base_bg = cell.cget("background")
         self.cells[id(entry)] = (cell, label, button)
 
-    def highlight(self, entry) -> None:
-        """Mark *entry*'s cell as current (border + tint + bold) and scroll it into view."""
+    def highlight(self, entry, scroll: bool = False) -> None:
+        """Mark *entry*'s cell as current (border + tint + bold). *scroll* brings it into
+        view — used for arrow-key stepping and the initial build, but NOT for a click, so
+        clicking a section doesn't jerk the list to put that section on top."""
         self.current = entry
         for key, (cell, label, _btn) in self.cells.items():
             on = key == id(entry)
@@ -1093,7 +1121,8 @@ class _PickerHandle:
                 rec[2].focus_set()
             except Exception:
                 pass
-        self._scroll_to(entry)
+        if scroll:
+            self._scroll_to(entry)
 
     def _scroll_to(self, entry) -> None:
         rec = self.cells.get(id(entry))
@@ -1117,6 +1146,7 @@ class _PickerHandle:
             except ValueError:
                 i = 0
             self.on_select(self.order[(i + delta) % len(self.order)])
+            self._scroll_to(self.current)      # arrow-step keeps the new selection visible
         return "break"
 
 
@@ -1172,5 +1202,5 @@ def thumbnail_picker(parent, entries, on_select: Callable, photo_refs: list,
         lbl.pack()
         handle._add(e, cell, lbl, button)
     if selected is not None:
-        handle.highlight(selected)
+        handle.highlight(selected, scroll=True)    # bring the initial selection into view
     return handle
