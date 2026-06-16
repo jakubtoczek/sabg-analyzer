@@ -2,13 +2,14 @@
 rem ===========================================================================
 rem  Double-click launcher for the SABG Analyzer GUI.
 rem  - Prefers a Python that ALREADY has the packages; otherwise prefers a
-rem    wheel-friendly version (3.12/3.11/3.10) over a too-new default (e.g. 3.13/
-rem    3.14), because pylibCZIrw only ships prebuilt wheels for those - on a newer
-rem    Python pip would try to COMPILE it from source (needs CMake/C++ -> fails).
-rem  - Installs wheels only (never compiles); the check/install/launch use ONE Python.
-rem  - On a PC with no Python at all, it guides installing Python 3.12.
-rem  - Works even from a network / OneDrive Desktop (UNC): everything is keyed off
-rem    this script's own folder (%~dp0), never the current directory.
+rem    wheel-friendly version (3.12/3.11/3.10) over a too-new one (3.13/3.14...),
+rem    because pylibCZIrw only ships prebuilt wheels for ~3.9-3.12. On a newer
+rem    Python there is no wheel (and pip would try to COMPILE it -> needs CMake).
+rem  - If only a too-new Python exists, it offers to install 3.12 via the Python
+rem    manager (py install 3.12), else guides a manual 3.12 install.
+rem  - Installs wheels only (never compiles); check/install/launch use ONE Python.
+rem  - Works from a network / OneDrive Desktop (UNC): everything is keyed off this
+rem    script's own folder (%~dp0), never the current directory.
 rem ===========================================================================
 set "HERE=%~dp0"
 pushd "%HERE%" 2>nul
@@ -23,8 +24,16 @@ for %%C in (%CANDS%) do if not defined PY ( %%~C -c "%DEPS%" >nul 2>nul && set "
 if defined PY goto :launch
 
 rem 2) None has the packages yet -> pick one to install into (wheel-friendly first).
+set "PY="
 for %%C in (%CANDS%) do if not defined PY ( %%~C -c "import sys" >nul 2>nul && set "PY=%%~C" )
 if not defined PY goto :no_python
+
+rem 2b) Reject a too-new (or too-old) Python BEFORE the doomed install: pylibCZIrw
+rem     wheels exist only for CPython 3.9 - 3.12.
+set "PYNUM="
+for /f %%v in ('%PY% -c "import sys;print(sys.version_info[0]*100+sys.version_info[1])" 2^>nul') do set "PYNUM=%%v"
+if defined PYNUM if %PYNUM% GTR 312 goto :wrong_python
+if defined PYNUM if %PYNUM% LSS 309 goto :wrong_python
 
 :install_deps
 echo.
@@ -60,6 +69,36 @@ if /I "%PY:~0,3%"=="py " ( where pyw     >nul 2>nul && ( start "" pyw%PY:~2% -m 
 %PY% -m sabg_gui
 goto :end
 
+:wrong_python
+echo.
+echo ---------------------------------------------------------------------------
+echo  The Python found is too new for the CZI reader. pylibCZIrw has prebuilt
+echo  packages only for Python 3.9 - 3.12; you need Python 3.12.
+echo ---------------------------------------------------------------------------
+echo.
+%PY% -c "import sys;print('  (found Python',sys.version.split()[0]+')')" 2>nul
+echo.
+set /p "ANS=Install Python 3.12 now with the Python manager (py install 3.12)? [Y/n] "
+if /I "%ANS%"=="n" goto :wrong_python_manual
+echo.
+py install 3.12
+if errorlevel 1 goto :wrong_python_manual
+echo.
+echo Python 3.12 installed - continuing...
+set "PY="
+for %%C in (%CANDS%) do if not defined PY ( %%~C -c "import sys" >nul 2>nul && set "PY=%%~C" )
+if defined PY goto :install_deps
+
+:wrong_python_manual
+echo.
+echo Install Python 3.12 manually, then double-click SABG_Analyzer.bat again:
+echo   python.org -^> Downloads -^> Stable Releases -^> Python 3.12.x -^> Windows
+echo   installer (64-bit), and TICK "Add python.exe to PATH".
+start "" https://www.python.org/downloads/windows/
+echo.
+pause
+goto :end
+
 :no_python
 echo ===========================================================================
 echo  SABG Analyzer needs Python, which is not installed on this PC yet.
@@ -84,9 +123,10 @@ goto :end
 :pip_failed
 echo.
 echo Package install failed - see the messages above.
-echo If it mentions building a wheel / CMake / pylibCZIrw, your Python is too new:
-echo install Python 3.12 (python.org -^> Stable Releases -^> 3.12.x, 64-bit, "Add to
-echo PATH"), then run SABG_Analyzer.bat again. Otherwise check internet / proxy.
+echo If it mentions pylibCZIrw / "no matching distribution" / building a wheel,
+echo your Python is too new: install Python 3.12 (py install 3.12, or python.org
+echo -^> 3.12.x 64-bit, "Add to PATH"), then run SABG_Analyzer.bat again.
+echo Otherwise check internet / proxy.
 pause
 goto :end
 
