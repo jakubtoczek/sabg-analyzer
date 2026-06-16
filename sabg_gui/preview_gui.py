@@ -1392,10 +1392,12 @@ class PreviewWindow(tk.Toplevel):
             return None
         ov = self.cfg.overlay
         shown = lambda k: self.show_vars[k].get() and self.layers.get(k) is not None
-        cand_on = shown("sabg_candidate")
         # excluded + non-tissue OCCLUDE: detection layers are not drawn under them, so the
         # overlay shows everything except in those areas. Everything else just alpha-blends in
         # LAYER_SPEC order (overlaps stay visible — e.g. fold + artifact are not exclusive).
+        # Each layer is shown independently of the others (edge-rejected is NOT linked to the
+        # candidate layer); edge-rejected lives in tissue that already excludes folds/artifacts,
+        # so it never paints over them.
         occ = None
         for k in ("excluded", "nontissue"):
             if shown(k):
@@ -1403,10 +1405,6 @@ class PreviewWindow(tk.Toplevel):
         order = []
         for key, color_attr, alpha_attr, _d in gw.LAYER_SPEC:
             if not shown(key):
-                continue
-            # edge-rejected is a subset of the candidate set, so it's only meaningful while the
-            # candidate layer is shown; hide it otherwise (lone violet specks read as positives).
-            if key == "edge_removed" and not cand_on:
                 continue
             # Prefer the raw audit mask (fold_disp / sabg_candidate_disp) so overlaps stay visible.
             mask = self.layers.get(key + "_disp", self.layers[key])
