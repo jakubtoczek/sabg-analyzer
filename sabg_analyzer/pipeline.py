@@ -837,7 +837,10 @@ def _build_config_snapshot(cfg: Config, rows: list[dict]) -> dict:
                     "excluded_alpha": cfg.overlay.excluded_alpha,
                     "sabg_candidate_color": list(cfg.overlay.sabg_candidate_color),
                     "sabg_candidate_alpha": cfg.overlay.sabg_candidate_alpha},
-        "whitebalance": {"bright_frac": cfg.whitebalance.bright_frac,
+        "whitebalance": {"scope": cfg.whitebalance.scope,
+                         "white_point": (list(cfg.whitebalance.white_point)
+                                         if cfg.whitebalance.white_point is not None else None),
+                         "bright_frac": cfg.whitebalance.bright_frac,
                          "target": cfg.whitebalance.target,
                          "homogeneity_tol": cfg.whitebalance.homogeneity_tol},
         "output": {"debug": cfg.output.debug,

@@ -129,6 +129,7 @@ class PreviewWindow(tk.Toplevel):
         self._sb_live_artist: dict = {"thumb": None, "roi": None}  # per-axis AnchoredSizeBar
         self.wb_on = tk.BooleanVar(value=False)            # raw <-> white-balanced display
         self._wb_cache: dict[str, tuple] = {}              # which -> (src_rgb, wb_rgb)
+        self._section_wp: np.ndarray | None = None         # cached section white point (scope=section)
         self.show_vars: dict[str, tk.BooleanVar] = {}
         self.field_vars: dict[tuple[str, str], tk.Variable] = {}
         self._photo_refs: list[tk.PhotoImage] = []         # keep picker thumbs alive
@@ -342,6 +343,14 @@ class PreviewWindow(tk.Toplevel):
                   command=lambda: self._nav(source).reset()).pack(side="left", padx=(10, 2))
         tk.Checkbutton(bar, text="white-balanced", variable=self.wb_on,
                        command=self._on_wb_toggle).pack(side="left", padx=(8, 2))
+        # WB consistency scope: image (each self-balances) | section (one per section) |
+        # global (fixed white_point). Shared var so both bars' menus track together.
+        if not hasattr(self, "wb_scope"):
+            self.wb_scope = tk.StringVar(
+                value=getattr(self.cfg.whitebalance, "scope", "image"))
+        ttk.OptionMenu(bar, self.wb_scope, self.wb_scope.get(),
+                       "image", "section", "global",
+                       command=self._on_wb_scope).pack(side="left", padx=(0, 2))
         # scale-bar controls live in a collapsed strip (rarely changed)
         sb = self._collapsible_strip(bar, strip_parent, "⚖ scale bar",
                                      after_widget=after_widget)
@@ -452,12 +461,34 @@ class PreviewWindow(tk.Toplevel):
         c = self._wb_cache.get(which)
         if c is not None and c[0] is rgb:
             return c[1]
-        wbp = self.cfg.whitebalance
         out = whitebalance.white_balance(
-            rgb, whitebalance.estimate_white_point(rgb, wbp.bright_frac),
-            target=wbp.target)
+            rgb, self._white_point(rgb), target=self.cfg.whitebalance.target)
         self._wb_cache[which] = (rgb, out)
         return out
+
+    def _white_point(self, rgb: np.ndarray) -> np.ndarray:
+        """White point for *rgb* per ``cfg.whitebalance.scope`` (display-only):
+        ``global`` -> the fixed ``white_point``; ``section`` -> the section overview's
+        white point, reused across this section's ROIs for consistency; ``image`` ->
+        a per-image estimate (original behaviour)."""
+        wbp = self.cfg.whitebalance
+        if getattr(wbp, "scope", "image") == "section":
+            if self._section_wp is None and self.disp_rgb is not None:
+                self._section_wp = whitebalance.estimate_white_point(
+                    self.disp_rgb, wbp.bright_frac)
+            if self._section_wp is not None:
+                return self._section_wp
+        return whitebalance.resolve_white_point(rgb, wbp)
+
+    def _on_wb_scope(self, _v=None) -> None:
+        """Switch the white-balance consistency scope and refresh the WB display
+        (display-only — never affects quantification)."""
+        self.cfg.whitebalance.scope = self.wb_scope.get()
+        self._wb_cache.clear()                 # recompute with the new scope
+        self._section_wp = None
+        if self.wb_on.get():
+            self._on_wb_toggle()               # re-apply WB with the new scope
+        self._params_dirty = True              # scope is a config-affecting change
 
     def _on_wb_toggle(self) -> None:
         """Apply/undo the display white balance on BOTH the thumbnail and the ROI,
@@ -872,6 +903,7 @@ class PreviewWindow(tk.Toplevel):
         saved = self._section_state.get(entry.scene.key, {})
         self.roi_rect = saved.get("roi_rect")     # restore the remembered rectangle (if any)
         self.excl_mask = None                 # reload the section's mask (or blank)
+        self._section_wp = None               # recompute the section white point (scope=section)
         self._excl_dirty = False              # a freshly loaded section starts clean
         self._excl_artist = None
         self.brush_var.set("off")
@@ -961,12 +993,14 @@ class PreviewWindow(tk.Toplevel):
         # Achieved µm/px: the display spans the whole scene bbox, so it's the
         # section's pixel size scaled by (full-res width / displayed width).
         sc = self.entry.scene
+        mb = rgb.nbytes / 1e6                  # actual RAM of the loaded display image
         if sc.pixel_size_um and rgb.shape[1]:
             self._loaded_um = sc.pixel_size_um * sc.w / rgb.shape[1]
-            self.res_label.configure(text=f"loaded: {self._loaded_um:.3g} µm/px")
+            self.res_label.configure(
+                text=f"loaded: {self._loaded_um:.3g} µm/px  (~{mb:.0f} MB)")
         else:
             self._loaded_um = None
-            self.res_label.configure(text="loaded: —")
+            self.res_label.configure(text=f"loaded: —  (~{mb:.0f} MB)")
         # Hide the ROI selector's drawn rectangle unless it's actively being edited, so a
         # rectangle drawn on one thumb doesn't leak onto another (set_active(False) only stops
         # event handling — it never hides the rectangle; mirrors the set_visible(True) in
@@ -1135,10 +1169,11 @@ class PreviewWindow(tk.Toplevel):
         um = ww * sc.pixel_size_um if sc.pixel_size_um else 0
         capped = " (at cap)" if self.cfg.gui.preview_roi_cap_um and um >= \
             self.cfg.gui.preview_roi_cap_um - 1 else ""
-        # Show the size and wait for an explicit "Open ROI" (no auto-read / tab jump),
-        # so the rectangle can still be adjusted first.
+        # Show the size (px, µm, and the ~RAM of the full-res read) and wait for an explicit
+        # "Open ROI" (no auto-read / tab jump), so the rectangle can still be adjusted first.
+        roi_mb = ww * hh * 3 / 1e6
         self.status.configure(
-            text=f"ROI {ww}x{hh}px (~{um:.0f}µm){capped} — adjust, then 'Open ROI'.")
+            text=f"ROI {ww}x{hh}px (~{um:.0f}µm, ~{roi_mb:.0f} MB){capped} — adjust, then 'Open ROI'.")
         self._update_roi_buttons()
         self._update_result_provenance()      # result now lags the new rectangle
 
@@ -1482,7 +1517,8 @@ class PreviewWindow(tk.Toplevel):
                 scalebar_um=self._sb_len_um(), scalebar_pos=_SB_POS[self.sb_pos.get()],
                 scalebar_label=self.sb_label.get(), wb=True, target_um=target,
                 wb_bright_frac=self.cfg.whitebalance.bright_frac,
-                wb_target=self.cfg.whitebalance.target)
+                wb_target=self.cfg.whitebalance.target,
+                wb_white_point=self._white_point(rgb))   # match the on-screen WB (scope-aware)
             self.status.configure(
                 text=f"exported {len(written)} preset(s) → {base.parent}")
             messagebox.showinfo("Exported", "Wrote:\n" + "\n".join(p.name for p in written),

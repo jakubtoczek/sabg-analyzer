@@ -85,6 +85,14 @@ class WhiteBalanceParams:
     bright_frac: float = 0.2     # fraction of brightest pixels taken as the white point
     target: float = 250.0        # channel value the white point is scaled to (near-white)
     homogeneity_tol: float = 0.15  # reserved: max RGB spread for a manual white-point pick
+    # Consistency scope of the white point:
+    #   image   - each image/ROI/crop self-balances from its own brightest pixels (default,
+    #             original behaviour; can drift between ROIs/sections).
+    #   section - one white point per section (from its overview) is reused for all its ROIs.
+    #   global  - a single fixed `white_point` is used everywhere (set it for cross-section
+    #             comparable figures); if unset, falls back to per-image.
+    scope: str = "image"
+    white_point: list | None = None   # explicit [R,G,B] white point for scope=global / manual pick
 
 
 @dataclass

@@ -44,6 +44,20 @@ def estimate_white_point(rgb: np.ndarray, bright_frac: float = 0.2) -> np.ndarra
     return rgb[sel].astype(np.float32).mean(axis=0)
 
 
+def resolve_white_point(rgb: np.ndarray, wbp) -> np.ndarray:
+    """White point to use for *rgb* given a WhiteBalanceParams *wbp*, honouring
+    ``wbp.scope`` for cross-image consistency:
+
+    - ``global`` + ``wbp.white_point`` set -> that fixed point (comparable figures);
+    - otherwise the per-image estimate (``bright_frac``). ``section`` scope is handled
+      by the caller (it supplies the section's own white point); here it falls back to
+      per-image so batch/export stay self-balancing unless a global point is set.
+    """
+    if getattr(wbp, "scope", "image") == "global" and getattr(wbp, "white_point", None):
+        return np.asarray(wbp.white_point, np.float32)
+    return estimate_white_point(rgb, wbp.bright_frac)
+
+
 def white_balance(rgb: np.ndarray, background: np.ndarray,
                   target: float = 250.0) -> np.ndarray:
     """Scale each channel so *background* maps to *target* (near-white)."""

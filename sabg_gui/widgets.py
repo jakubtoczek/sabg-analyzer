@@ -453,6 +453,10 @@ SIZING_FIELDS = [
     ("", "full_debug", "bool", "full_debug", "Write extra debug artifacts."),
 ]
 WHITEBALANCE_FIELDS = [
+    ("whitebalance", "scope", "choice", "scope",
+     "White-point consistency (display/figures only): image = each self-balances; "
+     "section = one per section; global = fixed white_point for comparable figures.",
+     ["image", "section", "global"]),
     ("whitebalance", "bright_frac", "float", "bright_frac",
      "Fraction of the brightest pixels averaged as the white point (display/figures only)."),
     ("whitebalance", "target", "float", "target",
