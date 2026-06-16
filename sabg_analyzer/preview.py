@@ -211,14 +211,15 @@ def compute_roi_layers(rgb: np.ndarray, cfg: Config, pixel_size_um: float | None
     region_full = segment_tissue(rgb, tcfg)        # tissue before manual exclusion
     region = region_full & ~exclude if exclude is not None else region_full
     conv = _roi_conv(rgb, cfg, region)
-    region_c = (erode_mask(region, cfg.artifact.erode_px)
-                if cfg.artifact.enabled else region)
+    region_c_base = (erode_mask(region, cfg.artifact.erode_px)
+                     if cfg.artifact.enabled else region)
 
     fold_band = None
+    region_c = region_c_base
     if cfg.fold.enabled:
         fold_band = _roi_fold_band(rgb, region, pixel_size_um, cfg)
         if cfg.fold.exclude_from_tissue:
-            region_c = region_c & ~fold_band
+            region_c = region_c_base & ~fold_band
 
     t, art, fold, opp = compute_region_masks(
         rgb, tcfg, cfg, region=region, region_c=region_c, fold_band=fold_band)
@@ -226,13 +227,33 @@ def compute_roi_layers(rgb: np.ndarray, cfg: Config, pixel_size_um: float | None
     d = detect_sabg(rgb, t, opp, cfg, conv, thr, thr_s, pixel_size_um,
                     fold=fold, keep_here=None)
 
+    # ---- overlay/audit DISPLAY masks (preview-only; NEVER counted) ----
+    # The counting masks above are a PARTITION — `fold` is computed `& ~art` (masks.py) and the
+    # fold band is dropped from tissue when `fold.exclude_from_tissue` — so they can't overlap,
+    # which is why the overlay showed no fold∩artifact or candidate∩fold. For the overlay we want
+    # each detector's RAW extent so overlaps are visible. These feed ONLY `_overlay_order`; every
+    # %/area stat still reads the partition masks above, so quantification is unchanged.
+    fold_disp = fold if fold_band is None else (fold | (fold_band & art))   # full band, incl. artifact
+    if fold_band is not None and cfg.fold.exclude_from_tissue:
+        # Re-detect on tissue that still INCLUDES the fold band, so candidate can sit over a fold.
+        # ponytail: one extra ROI-sized pass, only when folds drop tissue; preview ROIs are capped.
+        t_disp, _a, _f, _o = compute_region_masks(
+            rgb, tcfg, cfg, region=region, region_c=region_c_base,
+            fold_band=fold_band, opp=opp)
+        cand_disp = detect_sabg(rgb, t_disp, opp, cfg, conv, thr, thr_s, pixel_size_um,
+                                fold=fold, keep_here=None)["sabg_candidate"]
+    else:
+        cand_disp = d["sabg_candidate"]
+
     return {
         "tissue": t,
         "region": region,
         "artifact": art,
         "fold": fold,
+        "fold_disp": fold_disp,             # overlay-only: full fold band (may overlap artifact)
         "sabg": d["sabg"],
         "sabg_candidate": d["sabg_candidate"],   # pre-rejection positives (B1 audit layer)
+        "sabg_candidate_disp": cand_disp,   # overlay-only: candidate incl. fold-band detections
         "deconv": d["deconv"],                   # SABG-channel score (for the intensity readout)
         "edge_removed": d["edge_removed"],
         "nontissue": ~region_full,          # glass/background only (not the excluded region)

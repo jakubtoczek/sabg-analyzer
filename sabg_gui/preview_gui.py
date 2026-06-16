@@ -1408,7 +1408,8 @@ class PreviewWindow(tk.Toplevel):
             # candidate layer is shown; hide it otherwise (lone violet specks read as positives).
             if key == "edge_removed" and not cand_on:
                 continue
-            mask = self.layers[key]
+            # Prefer the raw audit mask (fold_disp / sabg_candidate_disp) so overlaps stay visible.
+            mask = self.layers.get(key + "_disp", self.layers[key])
             if key not in ("excluded", "nontissue") and occ is not None:
                 mask = mask & ~occ
             order.append((mask, tuple(getattr(ov, color_attr)),
