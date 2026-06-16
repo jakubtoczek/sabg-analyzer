@@ -45,7 +45,7 @@ Inspecting the example slides revealed several facts that drive the whole design
    *Non-dense* folds that slip through still show as thin, curved **linear ridges** of false
    positives — an **optional** `fold` layer detects those on the overview (Frangi ridge ×
    structure-tensor coherence over the positive density), length/width-guarded, and rejects
-   the band (orange). Off by default; it separates *linear from blobby*, not *fold from real*,
+   the band (orange). On by default; it separates *linear from blobby*, not *fold from real*,
    so keep it conservative and audit the `*_compare.jpg`.
 
 Each `.czi` here is a `Bgr24` mosaic holding **several scenes = tissue sections**
@@ -62,6 +62,11 @@ Requires **Python 3.10+** with `pip` available.
 cd C:\Code\SABG_analyzer\main
 pip install -r requirements.txt
 ```
+
+**Brand-new PC (no Python)?** Just double-click **`SABG_Analyzer.bat`**. If Python isn't
+installed it opens the official download page with step-by-step instructions (remember to
+tick *Add python.exe to PATH* in the installer); run it again afterwards and it offers to
+install the packages above for you, then launches the GUI.
 
 Outputs are written **outside this code folder** (default `..\outputs`, i.e.
 `C:\Code\SABG_analyzer\outputs`) so the repo stays clean. Override with `--out`.
@@ -235,11 +240,11 @@ Key knobs (`config.example.yaml` documents them all):
 | `process_zoom` | Processing resolution. 1.0 = full res (recommended). Lower = faster, risks signal loss. |
 | `detection.primary` | `deconvolution` (default) or `opponent`. Both are always exported to compare. |
 | `detection.require_agreement` | SABG⁺ only where **both** scores fire (default true). Kills fold/density false positives. |
-| `threshold.scale` | Multiplies the auto threshold (default 0.825). With hysteresis on this is the **seed** (high) threshold — keep it fairly strict. |
-| `detection.hysteresis` / `hyst_low_scale` / `hyst_teal_min` | **Seed + grow** detection (default on). Seed at `threshold.scale`, then grow each seed into the *connected* faint teal down to `seed × hyst_low_scale` (default 0.5), only into pixels at least `hyst_teal_min` teal (0.04). Captures faint teal contiguous with strong teal; rejects isolated faint/edge teal. Connectivity is decided at maps res; full-res seeds always count. |
+| `threshold.scale` | Multiplies the auto threshold (default 0.70). With hysteresis on this is the **seed** (high) threshold — keep it fairly strict. |
+| `detection.hysteresis` / `hyst_low_scale` / `hyst_teal_min` | **Seed + grow** detection (default on). Seed at `threshold.scale`, then grow each seed into the *connected* faint teal down to `seed × hyst_low_scale` (default 0.5), only into pixels at least `hyst_teal_min` teal (0.02). Captures faint teal contiguous with strong teal; rejects isolated faint/edge teal. Connectivity is decided at maps res; full-res seeds always count. |
 | `detection.auto_estimate` | Estimate the SABG stain vector per scene instead of using defaults. |
 | `artifact.enabled` / `dark_level` / `teal_min` / `erode_px` | Dark fold/debris rejection: dark-and-non-teal pixels + eroded border, excluded from numerator and denominator. |
-| `fold.enabled` / `combine` / `min_length_um` / `max_width_um` / `band_width_um` / … | **Optional** linear-fold rejection: thin curved ridges of *false* SABG+ that aren't dense. Ridge (Frangi) + structure-tensor coherence on the overview density, length/width-guarded, drawn orange. Off by default; `combine`: `product`/`agreement`/`union`/`frangi_only`. |
+| `fold.enabled` / `combine` / `min_length_um` / `max_width_um` / `band_width_um` / … | **Optional** linear-fold rejection: thin curved ridges of *false* SABG+ that aren't dense. Ridge (Frangi) + structure-tensor coherence on the overview density, length/width-guarded, drawn orange. On by default; `combine`: `product`/`agreement`/`union`/`frangi_only`. |
 | `threshold.method` | `triangle` (default) / `otsu` / `percentile` / `fixed`. |
 | `threshold.from_overview` | **Speed:** derive the threshold from the overview and skip full-res pass 1 (~2× faster; threshold may shift slightly). Default false. |
 | `alias.fields` / `optional` / `spacer` / `tag_field` | How the section alias (results + filenames) is built from `sections.csv`. Default `animal_group`, `tissue` to disambiguate. |
