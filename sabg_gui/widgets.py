@@ -142,19 +142,15 @@ class CollapsibleFrame(tk.Frame):
 
     def __init__(self, parent, title: str, description: str = "",
                  opened: bool = True, relief: str = "groove", borderwidth: int = 1,
-                 header_left=None, **kw) -> None:
+                 btn_font=("Segoe UI", 9, "bold"), btn_fg: str | None = None, **kw) -> None:
         super().__init__(parent, relief=relief, borderwidth=borderwidth, **kw)
         self._title = title
         self._opened = bool(opened)
-        # header row: optional caller widget (e.g. an "enable" checkbox) on the LEFT, then
-        # the show/hide toggle button filling the rest.
-        header = tk.Frame(self)
-        header.pack(fill="x")
-        if header_left is not None:
-            header_left(header)
-        self._btn = tk.Button(header, anchor="w", relief="flat", font=("Segoe UI", 9, "bold"),
+        self._btn = tk.Button(self, anchor="w", relief="flat", font=btn_font,
                               command=self.toggle)
-        self._btn.pack(side="left", fill="x", expand=True)
+        if btn_fg is not None:
+            self._btn.configure(fg=btn_fg)
+        self._btn.pack(fill="x")
         self.body = tk.Frame(self)
         if description:
             tk.Label(self.body, text=description, anchor="w", justify="left",
@@ -334,17 +330,17 @@ DETECTION_GROUPS = [
      "Reject thin dark edge-shadow rims wrongly counted as positive."),
 ]
 
-# Layers in composite DRAW order (bottom -> top; last = on top). `_overlay_order` composites
-# topmost-wins (each layer is punched out from under any higher visible layer), so this order
-# IS the visual priority. Rules driven by Jakub's request: `sabg_candidate` (cyan) sits ABOVE
-# the rejection bands (artifact/fold/edge_removed) so it reads cleanly OVER them, with the final
-# `sabg` (green) on top of it; `excluded` + `nontissue` sit ABOVE candidate so candidate is NOT
-# shown over manually-excluded or non-tissue regions. (key, colour attr, alpha attr, default show).
+# Layers in composite DRAW order (bottom -> top; last = on top). `_overlay_order` ALPHA-BLENDS
+# them in this order (so overlaps stay visible — fold + artifact are NOT mutually exclusive),
+# EXCEPT `excluded` + `nontissue` occlude: the detection layers are not drawn under them, so the
+# overlay shows everything except in the excluded / non-tissue areas. Order puts `sabg_candidate`
+# (cyan) above the fold/artifact bands so it reads over them, with `edge_removed` (violet) and the
+# final `sabg` (green) above candidate. (key, colour attr, alpha attr, default show).
 LAYER_SPEC = [
     ("artifact", "artifact_color", "artifact_alpha", True),
     ("fold", "fold_color", "fold_alpha", True),
-    ("edge_removed", "edge_color", "edge_alpha", True),
     ("sabg_candidate", "sabg_candidate_color", "sabg_candidate_alpha", False),
+    ("edge_removed", "edge_color", "edge_alpha", True),
     ("sabg", "sabg_color", "sabg_alpha", True),
     ("excluded", "excluded_color", "excluded_alpha", True),
     ("nontissue", "nontissue_color", "nontissue_alpha", True),
@@ -842,36 +838,40 @@ def build_detection_sections(parent, cfg, field_vars: dict, on_change: Callable,
     section_extra = section_extra or {}
     out = []
     for title, fields, desc in DETECTION_GROUPS:
-        sec = tk.Frame(parent, padx=3, pady=1)               # borderless (was LabelFrame)
+        sec = tk.Frame(parent, padx=3, pady=1)               # borderless (the wrapper is bordered)
         sec.pack(fill="x", expand=True, pady=1)
-        tk.Label(sec, text=title, anchor="w", font=("Segoe UI", 9, "bold")).pack(fill="x")
-        # Compact (session 17): the per-stage description moved INTO the details expander
-        # (and onto the slider tooltip) so the always-visible part of each stage is just one
-        # row -- the composite slider + an inline "Reset" -- letting all 5 stages fit at
-        # 1320x840 with details collapsed. The expander is built first so field_vars is
-        # populated before the slider wires to it, but packed last (below the slider row).
-        # The 'enabled' field (artifact/fold/edge) rides the details header as a checkbox on
-        # the left instead of a body row; the rest of the raw params stay in the body.
+        # Title row: stage name (not bold) + the stage 'enable' tick (artifact/fold/edge) on
+        # the same line. The 'enabled' field is pulled OUT of the raw rows below.
+        trow = tk.Frame(sec)
+        trow.pack(fill="x")
+        tk.Label(trow, text=title, anchor="w").pack(side="left")
         enable_spec = next((f for f in fields if f[1] == "enabled"), None)
         body_fields = [f for f in fields if f[1] != "enabled"]
-
-        def _enable_header(hdr, spec=enable_spec):
-            section, attr, kind = spec[0], spec[1], spec[2]
-            obj = getattr(cfg, section) if section else cfg
-            var = tk.BooleanVar(value=bool(getattr(obj, attr)))
-            tk.Checkbutton(hdr, text="enable", variable=var,
-                           command=lambda s=section, a=attr, k=kind:
-                           on_change(s, a, k, recompute)).pack(side="left")
-            field_vars[(section, attr)] = var
-
+        if enable_spec is not None:
+            esec, eattr, ekind = enable_spec[0], enable_spec[1], enable_spec[2]
+            eobj = getattr(cfg, esec) if esec else cfg
+            evar = tk.BooleanVar(value=bool(getattr(eobj, eattr)))
+            tk.Checkbutton(trow, text="enable", variable=evar,
+                           command=lambda s=esec, a=eattr, k=ekind:
+                           on_change(s, a, k, recompute)).pack(side="left", padx=(6, 0))
+            field_vars[(esec, eattr)] = evar
+        # Compact (session 17): the per-stage description + raw params live behind a collapsed
+        # "details" expander (small grey, styled like the slider end-labels), so the always-
+        # visible part of each stage is just the title row + the composite slider. The expander
+        # is built first so field_vars is populated before the slider wires to it.
         det = CollapsibleFrame(sec, "details", description=desc, opened=False,
                                relief="flat", borderwidth=0,
-                               header_left=_enable_header if enable_spec else None)
+                               btn_font=("Segoe UI", 7), btn_fg="#888")
         Tooltip(det._btn, "Show or hide this stage's raw parameters.")
         grid = tk.Frame(det.body, padx=2, pady=2)
         grid.pack(fill="x")
         build_field_rows(grid, cfg, body_fields, field_vars, on_change, recompute,
                          sensitivity=False)
+        # section_extra (e.g. the per-ROI seed controls) goes LAST inside the details body.
+        if title in section_extra:
+            ex = tk.Frame(det.body, padx=2)
+            ex.pack(fill="x", pady=(2, 0))
+            section_extra[title](ex)
         # one always-visible row: composite sensitivity slider (cols 0-2) + Reset (col 3).
         srow = tk.Frame(sec, padx=2)
         srow.pack(fill="x", pady=(1, 0))
@@ -887,11 +887,7 @@ def build_detection_sections(parent, cfg, field_vars: dict, on_change: Callable,
                              cfg, f, field_vars, on_change, recompute))
         rbtn.grid(row=0, column=3, sticky="e", padx=(4, 0))
         Tooltip(rbtn, "Reset this stage's settings to the program defaults.")
-        if title in section_extra:
-            ex = tk.Frame(sec, padx=2)
-            ex.pack(fill="x", pady=(1, 0))
-            section_extra[title](ex)
-        det.pack(fill="x", pady=(1, 0))
+        det.pack(fill="x", pady=(1, 0))                       # details below the slider
         out.append((sec, det))
     return out
 
@@ -1105,8 +1101,11 @@ class _PickerHandle:
             on = key == id(entry)
             bg = self._SEL_BG if on else self._base_bg
             try:
-                cell.configure(background=bg, highlightthickness=2 if on else 0,
-                               highlightbackground=self._SEL_BORDER)
+                # Keep the 2px border reserved always (colour it to match the cell when not
+                # selected) so selecting a thumb doesn't shift it by the border width.
+                cell.configure(background=bg, highlightthickness=2,
+                               highlightbackground=self._SEL_BORDER if on else bg,
+                               highlightcolor=self._SEL_BORDER if on else bg)
                 label.configure(background=bg,
                                 font=("Segoe UI", 7, "bold") if on
                                 else ("Segoe UI", 7))
@@ -1178,7 +1177,8 @@ def thumbnail_picker(parent, entries, on_select: Callable, photo_refs: list,
         longest = max(longest, img.width(), img.height())
     factor = max(1, -(-longest // target_px))          # ceil(longest / target_px)
     for e in entries:
-        cell = tk.Frame(parent, padx=2, pady=3, highlightthickness=0)
+        cell = tk.Frame(parent, padx=2, pady=3, highlightthickness=2)
+        cell.configure(highlightbackground=cell.cget("background"))   # reserved, invisible border
         cell.pack(fill="x")
         button = None
         if e.thumb_path.exists():

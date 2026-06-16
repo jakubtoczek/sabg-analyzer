@@ -806,13 +806,13 @@ class PreviewWindow(tk.Toplevel):
                                     font=("Segoe UI", 8), fg="#888")
         self.result_meta.pack(fill="x")
 
-        # Detection parameters FIRST (above the layers panel). Each stage is ALWAYS open with
-        # one composite sensitivity slider (left = less, right = more); the raw parameters sit
-        # behind a per-stage "details" expander. The per-ROI seed threshold lives in SABG detection.
-        tk.Label(body, text="Detection parameters", anchor="w",
-                 font=("Segoe UI", 9, "bold")).pack(fill="x", padx=6, pady=(4, 0))
+        # Detection parameters FIRST (above the layers panel), in a bordered panel matching
+        # Result / Displayed layers. Each stage is ALWAYS open with one composite sensitivity
+        # slider; the raw params + the per-ROI seed sit behind a per-stage "details" expander.
+        params = tk.LabelFrame(body, text="Detection parameters", padx=4, pady=2)
+        params.pack(fill="x", padx=6, pady=2)
         gw.build_detection_sections(
-            body, self.cfg, self.field_vars, self._on_field, recompute=True,
+            params, self.cfg, self.field_vars, self._on_field, recompute=True,
             section_extra={"2. SABG detection": self._build_seed_controls})
 
         # layers panel (show / colour / alpha per layer); enabled on the ROI tab only
@@ -1391,19 +1391,26 @@ class PreviewWindow(tk.Toplevel):
         if self.layers is None:
             return None
         ov = self.cfg.overlay
-        # Visible layers in composite order (LAYER_SPEC = bottom -> top = priority).
-        vis = [(key, color_attr, alpha_attr)
-               for key, color_attr, alpha_attr, _d in gw.LAYER_SPEC
-               if self.show_vars[key].get() and self.layers.get(key) is not None]
+        shown = lambda k: self.show_vars[k].get() and self.layers.get(k) is not None
+        cand_on = shown("sabg_candidate")
+        # excluded + non-tissue OCCLUDE: detection layers are not drawn under them, so the
+        # overlay shows everything except in those areas. Everything else just alpha-blends in
+        # LAYER_SPEC order (overlaps stay visible — e.g. fold + artifact are not exclusive).
+        occ = None
+        for k in ("excluded", "nontissue"):
+            if shown(k):
+                occ = self.layers[k] if occ is None else (occ | self.layers[k])
         order = []
-        for i, (key, color_attr, alpha_attr) in enumerate(vis):
+        for key, color_attr, alpha_attr, _d in gw.LAYER_SPEC:
+            if not shown(key):
+                continue
+            # edge-rejected is a subset of the candidate set, so it's only meaningful while the
+            # candidate layer is shown; hide it otherwise (lone violet specks read as positives).
+            if key == "edge_removed" and not cand_on:
+                continue
             mask = self.layers[key]
-            # Topmost-wins: punch every higher visible layer out of this one, so each layer
-            # reads as a clean colour instead of a muddy alpha stack. Per LAYER_SPEC order this
-            # puts candidate SABG+ cleanly OVER artifact/fold/edge, with excluded + non-tissue
-            # above candidate. (n<=7 layers, so the O(n^2) mask AND is trivially cheap.)
-            for hk, _ca, _aa in vis[i + 1:]:
-                mask = mask & ~self.layers[hk]
+            if key not in ("excluded", "nontissue") and occ is not None:
+                mask = mask & ~occ
             order.append((mask, tuple(getattr(ov, color_attr)),
                           float(getattr(ov, alpha_attr))))
         return order
