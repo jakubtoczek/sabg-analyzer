@@ -1124,6 +1124,8 @@ class _PickerHandle:
             self._scroll_to(entry)
 
     def _scroll_to(self, entry) -> None:
+        """Scroll the list MINIMALLY so *entry* is visible — only when it's off-screen, and
+        just far enough to bring it into view (never yank it to the top)."""
         rec = self.cells.get(id(entry))
         if not rec:
             return
@@ -1132,7 +1134,18 @@ class _PickerHandle:
             canvas = cell.master.master
             cell.update_idletasks()
             total = cell.master.winfo_height() or 1
-            canvas.yview_moveto(max(0.0, (cell.winfo_y() - 20) / total))
+            view_h = canvas.winfo_height() or total
+            view_top = canvas.yview()[0] * total
+            view_bot = view_top + view_h
+            c_top = cell.winfo_y()
+            c_bot = c_top + cell.winfo_height()
+            if c_top < view_top:                       # off the top -> show its top
+                new_top = c_top
+            elif c_bot > view_bot:                     # off the bottom -> show its bottom
+                new_top = c_bot - view_h
+            else:
+                return                                 # already fully visible: don't move
+            canvas.yview_moveto(max(0.0, new_top / total))
         except Exception:
             pass
 
