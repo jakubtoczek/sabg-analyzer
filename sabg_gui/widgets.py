@@ -686,9 +686,23 @@ _SLIDER_KNOBS_BY_LABEL = dict(SLIDER_LAYERS)        # label -> [(section, attr, 
 # to label the slider and its tooltip correctly per stage.
 REJECT_SLIDER_LABELS = {"artifact", "fold", "edge-reject"}
 
+# Pre-SABG exclusion stages (tissue, artifact) run BEFORE detection, so their sliders are
+# framed in tissue/exclusion terms, NOT "fewer/more SABG⁺". (left, right, tip-template);
+# `{knobs}` is filled with the driven knob list. Directions verified vs SLIDER_LAYERS:
+# tissue right -> texture_min 0.0 / bg_margin 0.012 = more tissue; artifact right ->
+# dark_level 0.65 = reject more. Stages not listed keep the generic reject/detect labels.
+SLIDER_LABEL_OVERRIDES = {
+    "tissue":   ("← less tissue", "more tissue →",
+                 "Drives {knobs} together. Right keeps MORE tissue, left trims toward cleaner "
+                 "core tissue — sets the pre-SABG tissue mask, not the SABG⁺ count."),
+    "artifact": ("← keep more", "reject more →",
+                 "Drives {knobs} together. Right excludes MORE dark fold/debris before SABG "
+                 "detection, left keeps more — a pre-SABG exclusion, not the SABG⁺ count."),
+}
+
 
 def _add_composite_slider(parent, knobs, field_vars: dict, reject: bool = False,
-                          extra_tip: str = "") -> None:
+                          extra_tip: str = "", labels: tuple | None = None) -> None:
     """One 0-100 slider driving EVERY knob in *knobs* together. Detection stages read
     left = detect less, right = detect more; *reject* stages (artifact/fold/edge) read
     left = reject less, right = reject more. Each knob's field var must already be in
@@ -734,7 +748,9 @@ def _add_composite_slider(parent, knobs, field_vars: dict, reject: bool = False,
     # every stage agrees: right = more SABG⁺ survives for detection, right = more
     # rejected for the reject stages (D6).
     knob_list = ", ".join(k[4] for k in knobs)
-    if reject:
+    if labels is not None:                      # per-stage override (pre-SABG exclusion stages)
+        left_txt, right_txt, tip = labels[0], labels[1], labels[2].format(knobs=knob_list)
+    elif reject:
         left_txt, right_txt = "← keep more", "reject more →"
         tip = (f"Drives {knob_list} together. Right rejects MORE SABG⁺ positives "
                "(left keeps more) — the slider follows the SABG⁺ outcome, not the raw "
@@ -840,7 +856,8 @@ def build_detection_sections(parent, cfg, field_vars: dict, on_change: Callable,
             knobs = _SLIDER_KNOBS_BY_LABEL.get(slabel)
             if knobs:
                 _add_composite_slider(srow, knobs, field_vars,
-                                      reject=slabel in REJECT_SLIDER_LABELS, extra_tip=desc)
+                                      reject=slabel in REJECT_SLIDER_LABELS, extra_tip=desc,
+                                      labels=SLIDER_LABEL_OVERRIDES.get(slabel))
         rbtn = tk.Button(srow, text="Reset", font=("Segoe UI", 7), padx=4, pady=0,
                          command=lambda f=fields: _reset_section_fields(
                              cfg, f, field_vars, on_change, recompute))
