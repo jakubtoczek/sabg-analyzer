@@ -1,27 +1,29 @@
 @echo off
 rem ===========================================================================
 rem  Double-click launcher for the SABG Analyzer GUI.
-rem  - Uses an interpreter that ALREADY has the packages (prefers `python` on
-rem    PATH, then the `py` launcher) so it never re-installs needlessly.
-rem  - Only if none has them does it offer a one-time install, into that same
-rem    interpreter; the check, the install, and the launch all use ONE Python.
-rem  - On a PC with no Python at all, it guides the install.
-rem  - Works even from a network / OneDrive Desktop where cmd cannot `cd` to a
-rem    UNC path: everything is keyed off this script's own folder (%~dp0), never
-rem    the current directory.
+rem  - Prefers a Python that ALREADY has the packages; otherwise prefers a
+rem    wheel-friendly version (3.12/3.11/3.10) over a too-new default (e.g. 3.13/
+rem    3.14), because pylibCZIrw only ships prebuilt wheels for those - on a newer
+rem    Python pip would try to COMPILE it from source (needs CMake/C++ -> fails).
+rem  - Installs wheels only (never compiles); the check/install/launch use ONE Python.
+rem  - On a PC with no Python at all, it guides installing Python 3.12.
+rem  - Works even from a network / OneDrive Desktop (UNC): everything is keyed off
+rem    this script's own folder (%~dp0), never the current directory.
 rem ===========================================================================
 set "HERE=%~dp0"
 pushd "%HERE%" 2>nul
 
 set "DEPS=import pylibCZIrw,czifile,skimage,numpy,cv2,pandas,matplotlib,yaml"
+rem Interpreter preference (wheel-friendly versions first, then PATH python, then py):
+set "CANDS="py -3.12" "py -3.11" "py -3.10" "python" "py""
 
-rem 1) An interpreter that ALREADY imports everything wins (python on PATH, then py).
+rem 1) A Python that ALREADY imports everything wins.
 set "PY="
-for %%I in (python py) do if not defined PY ( %%I -c "%DEPS%" >nul 2>nul && set "PY=%%I" )
+for %%C in (%CANDS%) do if not defined PY ( %%~C -c "%DEPS%" >nul 2>nul && set "PY=%%~C" )
 if defined PY goto :launch
 
-rem 2) None has the packages yet -> pick one to install into (python on PATH, then py).
-for %%I in (python py) do if not defined PY ( where %%I >nul 2>nul && set "PY=%%I" )
+rem 2) None has the packages yet -> pick one to install into (wheel-friendly first).
+for %%C in (%CANDS%) do if not defined PY ( %%~C -c "import sys" >nul 2>nul && set "PY=%%~C" )
 if not defined PY goto :no_python
 
 :install_deps
@@ -42,7 +44,8 @@ echo.
 set /p "ANS=Install them into the Python above now? [Y/n] "
 if /I "%ANS%"=="n" goto :abort
 %PY% -m pip install --upgrade pip
-%PY% -m pip install -r "%HERE%requirements.txt"
+rem --only-binary=pylibCZIrw: use a prebuilt wheel, never compile from source.
+%PY% -m pip install --only-binary=pylibCZIrw -r "%HERE%requirements.txt"
 if errorlevel 1 goto :pip_failed
 echo.
 echo Done. Starting SABG Analyzer...
@@ -51,10 +54,9 @@ echo Done. Starting SABG Analyzer...
 rem Make the package importable regardless of the current directory (a UNC Desktop
 rem can leave cmd's cwd in C:\Windows), then launch windowless when possible.
 set "PYTHONPATH=%HERE%;%PYTHONPATH%"
-set "PYW="
-if /I "%PY%"=="python" set "PYW=pythonw"
-if /I "%PY%"=="py"     set "PYW=pyw"
-if defined PYW where %PYW% >nul 2>nul && ( start "" %PYW% -m sabg_gui & goto :end )
+if /I "%PY%"=="python"   ( where pythonw >nul 2>nul && ( start "" pythonw -m sabg_gui & goto :end ) )
+if /I "%PY%"=="py"       ( where pyw     >nul 2>nul && ( start "" pyw -m sabg_gui     & goto :end ) )
+if /I "%PY:~0,3%"=="py " ( where pyw     >nul 2>nul && ( start "" pyw%PY:~2% -m sabg_gui & goto :end ) )
 %PY% -m sabg_gui
 goto :end
 
@@ -63,14 +65,16 @@ echo ===========================================================================
 echo  SABG Analyzer needs Python, which is not installed on this PC yet.
 echo ===========================================================================
 echo.
-echo  A browser will now open the official Python download page. Then:
+echo  A browser will now open the Python download page. IMPORTANT: install
+echo  Python 3.12 (NOT the newest 3.13/3.14 - the CZI reader has no prebuilt
+echo  package for those yet). Then:
 echo.
-echo    1. Download the latest "Windows installer (64-bit)".
-echo    2. Run it. On the FIRST screen, TICK the box at the bottom:
+echo    1. Under "Stable Releases", find a "Python 3.12.x" entry.
+echo    2. Download its "Windows installer (64-bit)".
+echo    3. Run it. On the FIRST screen, TICK the box at the bottom:
 echo          [x] Add python.exe to PATH
-echo       (this lets Windows find Python - it is easy to miss).
-echo    3. Click "Install Now" and wait for it to finish.
-echo    4. Close this window, then double-click SABG_Analyzer.bat again.
+echo    4. Click "Install Now", let it finish.
+echo    5. Close this window, then double-click SABG_Analyzer.bat again.
 echo.
 start "" https://www.python.org/downloads/windows/
 echo Press any key to close this window...
@@ -79,7 +83,10 @@ goto :end
 
 :pip_failed
 echo.
-echo Package install failed - please check the messages above (internet / proxy?).
+echo Package install failed - see the messages above.
+echo If it mentions building a wheel / CMake / pylibCZIrw, your Python is too new:
+echo install Python 3.12 (python.org -^> Stable Releases -^> 3.12.x, 64-bit, "Add to
+echo PATH"), then run SABG_Analyzer.bat again. Otherwise check internet / proxy.
 pause
 goto :end
 
