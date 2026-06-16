@@ -1,33 +1,35 @@
 @echo off
 rem ===========================================================================
 rem  Double-click launcher for the SABG Analyzer GUI.
-rem  On a fresh PC it (1) guides the one-time Python install, then on the next
-rem  run (2) offers to install the Python packages, then (3) launches the GUI.
+rem  - Uses an interpreter that ALREADY has the packages (prefers `python` on
+rem    PATH, then the `py` launcher) so it never re-installs needlessly.
+rem  - Only if none has them does it offer a one-time install, into that same
+rem    interpreter; the check, the install, and the launch all use ONE Python.
+rem  - On a PC with no Python at all, it guides the install.
 rem ===========================================================================
 cd /d "%~dp0"
 title SABG Analyzer
 
-rem --- 1. Find Python (the py launcher, else python on PATH) ---
-set "PY="
-where py     >nul 2>nul && set "PY=py"
-if not defined PY (
-    where python >nul 2>nul && set "PY=python"
-)
-if not defined PY goto :no_python
+set "DEPS=import pylibCZIrw,czifile,skimage,numpy,cv2,pandas,matplotlib,yaml"
 
-rem --- 2. First run: make sure the dependencies are importable ---
-%PY% -c "import pylibCZIrw, czifile, skimage, numpy, cv2, pandas, matplotlib, yaml" >nul 2>nul
-if errorlevel 1 goto :install_deps
-goto :launch
+rem 1) An interpreter that ALREADY imports everything wins (python on PATH, then py).
+set "PY="
+for %%I in (python py) do if not defined PY ( %%I -c "%DEPS%" >nul 2>nul && set "PY=%%I" )
+if defined PY goto :launch
+
+rem 2) None has the packages yet -> pick one to install into (python on PATH, then py).
+for %%I in (python py) do if not defined PY ( where %%I >nul 2>nul && set "PY=%%I" )
+if not defined PY goto :no_python
 
 :install_deps
 echo.
+%PY% -c "import sys;print('Using Python',sys.version.split()[0],'at',sys.executable)"
+echo.
 echo SABG Analyzer needs to install a few Python packages the first time it runs
-echo (this can take a couple of minutes and needs an internet connection).
+echo (a couple of minutes, needs an internet connection).
 echo.
-set /p "ANS=Install them now? [Y/n] "
+set /p "ANS=Install them into the Python above now? [Y/n] "
 if /I "%ANS%"=="n" goto :abort
-echo.
 %PY% -m pip install --upgrade pip
 %PY% -m pip install -r requirements.txt
 if errorlevel 1 goto :pip_failed
@@ -35,9 +37,11 @@ echo.
 echo Done. Starting SABG Analyzer...
 
 :launch
-rem Prefer a windowless launch (no black console) when available.
-where pythonw >nul 2>nul && ( start "" pythonw -m sabg_gui & exit /b )
-where pyw     >nul 2>nul && ( start "" pyw -m sabg_gui & exit /b )
+rem Launch windowless (no black console) with the SAME interpreter's GUI variant.
+set "PYW="
+if /I "%PY%"=="python" set "PYW=pythonw"
+if /I "%PY%"=="py"     set "PYW=pyw"
+if defined PYW where %PYW% >nul 2>nul && ( start "" %PYW% -m sabg_gui & exit /b )
 %PY% -m sabg_gui
 exit /b
 
