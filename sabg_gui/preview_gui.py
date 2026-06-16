@@ -965,6 +965,12 @@ class PreviewWindow(tk.Toplevel):
         else:
             self._loaded_um = None
             self.res_label.configure(text="loaded: —")
+        # Hide the ROI selector's drawn rectangle unless it's actively being edited, so a
+        # rectangle drawn on one thumb doesn't leak onto another (set_active(False) only stops
+        # event handling — it never hides the rectangle; mirrors the set_visible(True) in
+        # _sync_selector_to_rect). A remembered rect still shows via _draw_saved_roi_outline.
+        if not self.selector.get_active() and hasattr(self.selector, "set_visible"):
+            self.selector.set_visible(False)
         self.thumb_canvas.draw_idle()
         self.thumb_nav.set_home()
         self._restore_pending_view()           # re-zoom to the carried area after a res change
@@ -1384,10 +1390,21 @@ class PreviewWindow(tk.Toplevel):
             return None
         ov = self.cfg.overlay
         order = []
-        for key, color_attr, alpha_attr, _d in gw.LAYER_SPEC:
-            if self.show_vars[key].get():
-                order.append((self.layers[key], tuple(getattr(ov, color_attr)),
-                              float(getattr(ov, alpha_attr))))
+        for idx, (key, color_attr, alpha_attr, _d) in enumerate(gw.LAYER_SPEC):
+            if not self.show_vars[key].get():
+                continue
+            mask = self.layers[key]
+            if key == "fold" and mask is not None:
+                # Don't paint the orange fold band UNDER a higher signal layer: candidate
+                # (cyan), SABG+ (green) and edge-rejected (violet) are drawn above fold in
+                # LAYER_SPEC, but alpha-blending cyan over the strong orange just muddied it.
+                # Punch the visible upper layers out of the band so they read cleanly over it.
+                for up_key, *_ in gw.LAYER_SPEC[idx + 1:]:
+                    up = self.layers.get(up_key)
+                    if up is not None and self.show_vars[up_key].get():
+                        mask = mask & ~up
+            order.append((mask, tuple(getattr(ov, color_attr)),
+                          float(getattr(ov, alpha_attr))))
         return order
 
     def _composite(self) -> np.ndarray | None:
