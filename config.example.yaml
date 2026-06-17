@@ -229,8 +229,9 @@ whitebalance:
   bright_frac: 0.2     # fraction of the brightest pixels averaged as the white point
   target: 250.0        # channel value that white point is scaled to (near-white)
   homogeneity_tol: 0.15  # reserved: max RGB spread allowed for a manual white-point pick
-  scope: image         # image | section | global (global uses the fixed white_point below)
-  white_point: null    # [R,G,B] for scope=global / pipette pick; null -> per-image estimate
+  auto: true           # true -> estimate the white point; false -> manual (GUI pipette / white_point)
+  scope: image         # image | section | global — where the point comes from + how widely it is shared
+  white_point: null    # [R,G,B] for the GLOBAL manual pick (what batch honours); null -> estimate
   # Display-only tone (all no-op by default; never seen by quantification):
   temperature: 0.0     # warm(+)/cool(-) nudge of the white point; ZEN ±1 ≈ ±10 K
   temperature_k: 0.02  # per-step gain of `temperature` (calibration knob)

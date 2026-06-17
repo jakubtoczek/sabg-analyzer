@@ -128,10 +128,13 @@ class PreviewWindow(tk.Toplevel):
         self.sb_live = tk.BooleanVar(value=False)          # draw a live (non-burned) bar on the image
         self._sb_live_artist: dict = {"thumb": None, "roi": None}  # per-axis AnchoredSizeBar
         self.wb_on = tk.BooleanVar(value=False)            # raw <-> white-balanced display
+        self.wb_auto = tk.BooleanVar(value=True)           # auto estimate (default) vs manual pick
         self._wb_cache: dict[str, tuple] = {}              # which -> (src_rgb, wb_rgb)
         self._section_wp: np.ndarray | None = None         # cached section white point (scope=section)
-        self.wb_pick_var = tk.BooleanVar(value=False)      # "pick white" pipette mode
-        self._wb_spots: list[np.ndarray] = []              # accumulated picked spot means (multi-spot)
+        self._global_wp: np.ndarray | None = None          # cached dataset white point (scope=global)
+        self._image_wp: np.ndarray | None = None           # transient manual pick (scope=image)
+        self._wb_pick = False                              # "pick white" rectangle mode active?
+        self._pick_btns: list[tk.Button] = []              # per-tab "pick white" toggle buttons
         # display tone (figures only; default no-op) — shared across both tabs' strips
         _wb = self.cfg.whitebalance
         self.tone_brightness = tk.DoubleVar(value=_wb.brightness)
@@ -168,6 +171,7 @@ class PreviewWindow(tk.Toplevel):
         for _v in (self.sb_pos, self.sb_len, self.sb_label, self.sb_live):
             _v.trace_add("write", lambda *_: self._refresh_live_scalebar_all())
         self._build_layout()
+        self._update_pick_state()              # 'pick white' starts greyed (WB off by default)
         self._populate_picker()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(100, self._drain_queue)
@@ -276,6 +280,9 @@ class PreviewWindow(tk.Toplevel):
             handle_props=dict(markeredgecolor="black", markerfacecolor="white",
                               markersize=7))
         self.selector.set_active(False)
+        # WB pipette: a dashed-cyan rectangle whose region mean sets the manual white point.
+        # Active only in "pick white" mode; its rectangle stays drawn as the dotted outline.
+        self.wp_selector_thumb = self._make_wp_selector(self.thumb_ax)
         # brush painting uses left-drag (only when a brush mode is active); a hover
         # outline shows the brush footprint and is hidden when the pointer leaves.
         self.thumb_canvas.mpl_connect("button_press_event", self._on_brush_press)
@@ -283,8 +290,6 @@ class PreviewWindow(tk.Toplevel):
         self.thumb_canvas.mpl_connect("button_release_event", self._on_brush_release)
         self.thumb_canvas.mpl_connect("axes_leave_event", self._on_brush_leave)
         self.thumb_canvas.mpl_connect("figure_leave_event", self._on_brush_leave)
-        # WB pipette: clicks sample a white point (only while "pick white" is on)
-        self.thumb_canvas.mpl_connect("button_press_event", self._on_pick_press)
 
     def _build_roi_tab(self) -> None:
         tab = tk.Frame(self.nb)
@@ -302,7 +307,7 @@ class PreviewWindow(tk.Toplevel):
         self.roi_canvas.get_tk_widget().pack(fill="both", expand=True)
         self.roi_nav = CanvasNav(self.roi_canvas, self.roi_ax,
                                  on_view_change=lambda: self._refresh_live_scalebar("roi"))
-        self.roi_canvas.mpl_connect("button_press_event", self._on_pick_press)  # WB pipette
+        self.wp_selector_roi = self._make_wp_selector(self.roi_ax)   # WB pipette (image scope)
         self._roi_hint()
         self.nb.tab(self.roi_tab, state="disabled")    # greyed until a ROI is opened
 
@@ -354,27 +359,35 @@ class PreviewWindow(tk.Toplevel):
             after_widget = bar
         tk.Button(bar, text="Reset view",
                   command=lambda: self._nav(source).reset()).pack(side="left", padx=(10, 2))
-        tk.Checkbutton(bar, text="white-balanced", variable=self.wb_on,
+        # White balance lives in its own collapsed strip: on/off, auto vs manual, scope,
+        # the draggable pick + clear, and the temperature nudge (a colour-balance control).
+        wbs = self._collapsible_strip(bar, strip_parent, "⚪ white balance",
+                                      after_widget=after_widget)
+        tk.Checkbutton(wbs, text="on", variable=self.wb_on,
                        command=self._on_wb_toggle).pack(side="left", padx=(8, 2))
-        # WB consistency scope: image (each self-balances) | section (one per section) |
-        # global (fixed white_point). Shared var so both bars' menus track together.
+        tk.Checkbutton(wbs, text="auto", variable=self.wb_auto,
+                       command=self._on_wb_auto).pack(side="left", padx=(2, 2))
+        # scope: image (each self-balances) | section (one per section) | global (whole dataset).
+        # Shared var so both tabs' menus track together.
         if not hasattr(self, "wb_scope"):
             self.wb_scope = tk.StringVar(
                 value=getattr(self.cfg.whitebalance, "scope", "image"))
-        ttk.OptionMenu(bar, self.wb_scope, self.wb_scope.get(),
+        ttk.OptionMenu(wbs, self.wb_scope, self.wb_scope.get(),
                        "image", "section", "global",
                        command=self._on_wb_scope).pack(side="left", padx=(0, 2))
-        # WB pipette: pick a white point off the image (sets scope=global); clear reverts.
-        tk.Checkbutton(bar, text="pick white", variable=self.wb_pick_var,
-                       command=self._on_wb_pick_toggle).pack(side="left", padx=(4, 0))
-        tk.Button(bar, text="clear", command=self._wb_clear_pick).pack(side="left", padx=(0, 2))
-        # tone/temperature live in a collapsed strip (rarely changed; default no-op)
+        # sticky "pick white" toggle (like Draw ROI); enabled only when WB on + Auto off
+        btn_pick = tk.Button(wbs, text="pick white", command=self.on_pick_white)
+        btn_pick.pack(side="left", padx=(4, 0))
+        self._pick_btns.append(btn_pick)
+        self.btn_pick_white = btn_pick
+        tk.Button(wbs, text="clear", command=self._wb_clear_pick).pack(side="left", padx=(0, 2))
+        self._tone_row(wbs, "temp", self.tone_temp, -10.0, 10.0)
+        # tone curve in a collapsed strip (rarely changed; default no-op)
         tn = self._collapsible_strip(bar, strip_parent, "🎨 tone",
                                      after_widget=after_widget)
         self._tone_row(tn, "bright", self.tone_brightness, -1.0, 1.0)
         self._tone_row(tn, "contr", self.tone_contrast, -1.0, 1.0)
         self._tone_row(tn, "gamma", self.tone_gamma, 0.2, 3.0)
-        self._tone_row(tn, "temp", self.tone_temp, -10.0, 10.0)
         tk.Button(tn, text="reset", command=self._reset_tone).pack(side="left", padx=(8, 2))
         # scale-bar controls live in a collapsed strip (rarely changed)
         sb = self._collapsible_strip(bar, strip_parent, "⚖ scale bar",
@@ -493,28 +506,65 @@ class PreviewWindow(tk.Toplevel):
         return out
 
     def _white_point(self, rgb: np.ndarray) -> np.ndarray:
-        """White point for *rgb* per ``cfg.whitebalance.scope`` (display-only):
-        ``global`` -> the fixed ``white_point``; ``section`` -> the section overview's
-        white point, reused across this section's ROIs for consistency; ``image`` ->
-        a per-image estimate (original behaviour)."""
+        """White point for *rgb* (display-only), per ``cfg.whitebalance`` scope + auto/manual:
+        - ``global`` -> one point for the whole dataset (manual ``white_point`` if set & not auto,
+          else estimated from the current overview), cached in ``_global_wp``.
+        - ``section`` -> one point per section (this section's manual pick if any, else estimated
+          from its overview), cached in ``_section_wp``.
+        - ``image`` -> the image's own manual pick (``_image_wp``) when manual, else its own estimate.
+        """
         wbp = self.cfg.whitebalance
-        if getattr(wbp, "scope", "image") == "section":
-            if self._section_wp is None and self.disp_rgb is not None:
-                self._section_wp = whitebalance.estimate_white_point(
-                    self.disp_rgb, wbp.bright_frac)
+        scope = getattr(wbp, "scope", "image")
+        auto = getattr(wbp, "auto", True)
+        bf = wbp.bright_frac
+        if scope == "global":
+            if self._global_wp is None:
+                if not auto and wbp.white_point:
+                    self._global_wp = np.asarray(wbp.white_point, np.float32)
+                else:
+                    ref = self.disp_rgb if self.disp_rgb is not None else rgb
+                    self._global_wp = whitebalance.estimate_white_point(ref, bf)
+            return self._global_wp
+        if scope == "section":
+            if self._section_wp is None:
+                pick = (self._section_state.get(self.entry.scene.key, {}).get("wp")
+                        if (not auto and self.entry is not None) else None)
+                if pick is not None:
+                    self._section_wp = np.asarray(pick, np.float32)
+                elif self.disp_rgb is not None:
+                    self._section_wp = whitebalance.estimate_white_point(self.disp_rgb, bf)
             if self._section_wp is not None:
                 return self._section_wp
-        return whitebalance.resolve_white_point(rgb, wbp)
+        if not auto and self._image_wp is not None:    # image scope, manual
+            return np.asarray(self._image_wp, np.float32)
+        return whitebalance.estimate_white_point(rgb, bf)
 
     def _on_wb_scope(self, _v=None) -> None:
-        """Switch the white-balance consistency scope and refresh the WB display
-        (display-only — never affects quantification)."""
+        """Switch the white-balance scope and refresh the WB display (display-only)."""
         self.cfg.whitebalance.scope = self.wb_scope.get()
-        self._wb_cache.clear()                 # recompute with the new scope
-        self._section_wp = None
+        self._reset_wp_caches()
+        self._update_pick_state()
         if self.wb_on.get():
-            self._on_wb_toggle()               # re-apply WB with the new scope
-        self._params_dirty = True              # scope is a config-affecting change
+            self._on_wb_toggle()
+        self._params_dirty = True
+
+    def _on_wb_auto(self, _v=None) -> None:
+        """Toggle auto-estimate vs manual white point. Turning Auto on exits pick mode."""
+        self.cfg.whitebalance.auto = bool(self.wb_auto.get())
+        if self.cfg.whitebalance.auto and self._wb_pick:
+            self._set_pick_active(False)
+        self._reset_wp_caches()
+        self._update_pick_state()
+        if self.wb_on.get():
+            self._on_wb_toggle()
+        self._params_dirty = True
+
+    def _reset_wp_caches(self) -> None:
+        """Drop cached/derived white points + the balanced-image cache (scope/auto changed)."""
+        self._wb_cache.clear()
+        self._section_wp = None
+        self._global_wp = None
+        self._image_wp = None
 
     def _on_wb_toggle(self) -> None:
         """Apply/undo the display white balance on BOTH the thumbnail and the ROI,
@@ -529,59 +579,125 @@ class PreviewWindow(tk.Toplevel):
             self.thumb_canvas.draw_idle()
         if self.roi_rgb is not None and self.layers is not None:
             self._redraw()
+        self._update_pick_state()              # WB off greys 'pick white'
 
     # -- WB pipette (manual white-point pick; display-only) ----------------
-    def _on_wb_pick_toggle(self) -> None:
-        """Toggle the pipette. While on, clicks sample a white point; the exclusion
-        brush is forced off so the two click modes never fight."""
-        if self.wb_pick_var.get() and self.brush_mode is not None:
-            self.brush_var.set("off")
-            self._on_brush_mode()              # mirror the brush radio handler
+    def _make_wp_selector(self, ax) -> RectangleSelector:
+        """A dashed-cyan, interactive RectangleSelector for white-point picking on *ax*
+        (inactive until 'pick white' is on). Its rectangle is the persistent dotted outline."""
+        sel = RectangleSelector(
+            ax, self._on_wp_select, useblit=True, button=[1],
+            minspanx=3, minspany=3, spancoords="pixels", interactive=True,
+            props=dict(facecolor="cyan", edgecolor="cyan", alpha=0.20, fill=True,
+                       linestyle="--", linewidth=1.4))
+        sel.set_active(False)
+        return sel
 
-    def _on_pick_press(self, e) -> None:
-        """Sample the clicked pixel(s) as a manual white point (multi-click averages).
-        Picking implies 'use this everywhere', so it switches scope to global."""
-        if not self.wb_pick_var.get() or e.xdata is None:
-            return
-        if e.inaxes is self.thumb_ax:
+    def _update_pick_state(self) -> None:
+        """Enable the 'pick white' buttons only when WB is on AND Auto is off; grey them
+        otherwise (and leave pick mode if it becomes unavailable)."""
+        avail = self.wb_on.get() and not self.wb_auto.get()
+        for btn in self._pick_btns:
+            btn.configure(state="normal" if avail else "disabled")
+        if not avail and self._wb_pick:
+            self._set_pick_active(False)
+
+    def _set_pick_active(self, active: bool) -> None:
+        """Sticky 'pick white' toggle (mirrors Draw ROI): activate the white-point
+        rectangle selectors and reflect the state on the button. Picking is exclusive
+        with Draw ROI and the exclusion brush."""
+        self._wb_pick = active
+        if active:
+            self._set_draw_active(False)          # picking and ROI-draw are exclusive
+            self.brush_var.set("off")
+            self.brush_mode = None
+        for sel in (getattr(self, "wp_selector_thumb", None),
+                    getattr(self, "wp_selector_roi", None)):
+            if sel is not None:
+                sel.set_active(active)
+                if not active and hasattr(sel, "set_visible"):
+                    sel.set_visible(False)
+        for btn in self._pick_btns:
+            if str(btn.cget("state")) != "disabled":
+                btn.configure(relief="sunken" if active else "raised",
+                              bg="#cfe3ff" if active else self._roi_btn_bg)
+        self.thumb_canvas.draw_idle()
+        self.roi_canvas.draw_idle()
+        if active:
+            self.status.configure(text="drag a white/glass rectangle to set the white point "
+                                       f"({self.cfg.whitebalance.scope}).")
+
+    def on_pick_white(self) -> None:
+        """'pick white' button: toggle the draggable white-point picker."""
+        self._set_pick_active(not self._wb_pick)
+
+    def _on_wp_select(self, eclick, erelease) -> None:
+        """Region-mean of the dragged rectangle -> manual white point at the current scope.
+        Picking inside a ROI is only meaningful for `image` scope (section/global must be
+        picked on the overview)."""
+        ax = eclick.inaxes
+        if ax is self.thumb_ax:
             src = self.disp_rgb
-        elif e.inaxes is self.roi_ax:
+        elif ax is self.roi_ax:
+            if self.cfg.whitebalance.scope != "image":
+                self.status.configure(
+                    text="for section/global, pick on the Thumbnail overview (not a ROI).")
+                return
             src = self.roi_rgb
         else:
             return
-        if src is None:
+        if src is None or eclick.xdata is None or erelease.xdata is None:
             return
         h, w = src.shape[:2]
-        cx, cy = int(round(e.xdata)), int(round(e.ydata))
-        x0, x1 = max(0, cx - 2), min(w, cx + 3)        # 5x5 window, clipped to image
-        y0, y1 = max(0, cy - 2), min(h, cy + 3)
-        self._wb_spots.append(src[y0:y1, x0:x1].reshape(-1, 3).astype(np.float32).mean(axis=0))
-        wp = np.mean(self._wb_spots, axis=0)
-        self.cfg.whitebalance.white_point = [float(v) for v in wp]
-        self.cfg.whitebalance.scope = "global"
-        self.wb_scope.set("global")
+        xs = sorted((int(round(eclick.xdata)), int(round(erelease.xdata))))
+        ys = sorted((int(round(eclick.ydata)), int(round(erelease.ydata))))
+        x0, x1 = max(0, xs[0]), min(w, xs[1] + 1)
+        y0, y1 = max(0, ys[0]), min(h, ys[1] + 1)
+        if x1 <= x0 or y1 <= y0:
+            return
+        wp = src[y0:y1, x0:x1].reshape(-1, 3).astype(np.float32).mean(axis=0)
+        self._apply_picked_wp(wp)
+
+    def _apply_picked_wp(self, wp: np.ndarray) -> None:
+        """Store a picked white point at the active scope's granularity + re-balance."""
+        wbp = self.cfg.whitebalance
+        scope = wbp.scope
+        wp = [float(v) for v in wp]
+        if scope == "global":
+            wbp.white_point = wp
+            self._global_wp = np.asarray(wp, np.float32)
+        elif scope == "section":
+            if self.entry is not None:
+                self._section_state.setdefault(self.entry.scene.key, {})["wp"] = wp
+            self._section_wp = np.asarray(wp, np.float32)
+        else:                                      # image
+            self._image_wp = np.asarray(wp, np.float32)
         self._wb_cache.clear()
-        self._section_wp = None
         self._params_dirty = True
-        if not self.wb_on.get():               # show the result immediately
+        if not self.wb_on.get():
             self.wb_on.set(True)
         self._on_wb_toggle()
         self.status.configure(
-            text=f"white point = ({wp[0]:.0f},{wp[1]:.0f},{wp[2]:.0f}) "
-                 f"from {len(self._wb_spots)} spot(s)")
+            text=f"{scope} white point = ({wp[0]:.0f},{wp[1]:.0f},{wp[2]:.0f})")
 
     def _wb_clear_pick(self) -> None:
-        """Forget the picked spots and revert to per-image (scope=image)."""
-        self._wb_spots.clear()
-        self.cfg.whitebalance.white_point = None
-        self.cfg.whitebalance.scope = "image"
-        self.wb_scope.set("image")
+        """Forget the manual pick for the CURRENT scope (revert that scope to auto-estimate)."""
+        wbp = self.cfg.whitebalance
+        scope = wbp.scope
+        if scope == "global":
+            wbp.white_point = None
+            self._global_wp = None
+        elif scope == "section":
+            if self.entry is not None:
+                self._section_state.get(self.entry.scene.key, {}).pop("wp", None)
+            self._section_wp = None
+        else:
+            self._image_wp = None
         self._wb_cache.clear()
-        self._section_wp = None
         self._params_dirty = True
         if self.wb_on.get():
             self._on_wb_toggle()
-        self.status.configure(text="white point cleared")
+        self.status.configure(text=f"{scope} white point cleared")
 
     # -- WB tone / temperature (display-only) ------------------------------
     def _tone_row(self, parent, text, var, lo, hi) -> None:
@@ -600,8 +716,7 @@ class PreviewWindow(tk.Toplevel):
         wb.contrast = float(self.tone_contrast.get())
         wb.gamma = float(self.tone_gamma.get())
         wb.temperature = float(self.tone_temp.get())
-        self._wb_cache.clear()
-        self._section_wp = None
+        self._wb_cache.clear()                 # tone/temp apply after the white point; WP caches stay
         self._params_dirty = True
         if self.wb_on.get():
             self._on_wb_toggle()
@@ -1001,10 +1116,10 @@ class PreviewWindow(tk.Toplevel):
         # Remember the outgoing section's pending ROI + view before we tear it down,
         # so a later return restores them (captured here while disp_rgb/axes are live).
         if self.entry is not None:
-            self._section_state[self.entry.scene.key] = {
+            self._section_state.setdefault(self.entry.scene.key, {}).update({
                 "roi_rect": self.roi_rect,
                 "view_frac": self._capture_view_frac(),
-            }
+            })   # update (don't replace) so a stashed manual white point ("wp") survives
         self.entry = entry
         if self._picker is not None:
             self._picker.highlight(entry)     # mark the current section in the list
@@ -1013,6 +1128,7 @@ class PreviewWindow(tk.Toplevel):
         self.roi_rect = saved.get("roi_rect")     # restore the remembered rectangle (if any)
         self.excl_mask = None                 # reload the section's mask (or blank)
         self._section_wp = None               # recompute the section white point (scope=section)
+        self._image_wp = None                 # forget any transient image-scope manual pick
         self._excl_dirty = False              # a freshly loaded section starts clean
         self._excl_artist = None
         self.brush_var.set("off")

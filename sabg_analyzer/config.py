@@ -90,14 +90,16 @@ class WhiteBalanceParams:
     bright_frac: float = 0.2     # fraction of brightest pixels taken as the white point
     target: float = 250.0        # channel value the white point is scaled to (near-white)
     homogeneity_tol: float = 0.15  # reserved: max RGB spread for a manual white-point pick
-    # Consistency scope of the white point:
-    #   image   - each image/ROI/crop self-balances from its own brightest pixels (default,
-    #             original behaviour; can drift between ROIs/sections).
-    #   section - one white point per section (from its overview) is reused for all its ROIs.
-    #   global  - a single fixed `white_point` is used everywhere (set it for cross-section
-    #             comparable figures); if unset, falls back to per-image.
+    # auto=True  -> the white point is ESTIMATED (brightest bright_frac pixels of the scope's
+    #               reference image). auto=False -> MANUAL: use a picked white point (GUI pipette,
+    #               or `white_point` for the global scope).
+    auto: bool = True
+    # Consistency scope of the white point (where the point comes from + how widely it is shared):
+    #   image   - from the image being viewed (overview or ROI crop); each self-balances.
+    #   section - one point per section (from its overview), reused for the overview + all its ROIs.
+    #   global  - one point for the whole loaded dataset; every section/ROI shares it.
     scope: str = "image"
-    white_point: list | None = None   # explicit [R,G,B] white point for scope=global / manual pick
+    white_point: list | None = None   # [R,G,B] for the GLOBAL manual pick (the one batch honours)
     # Display-only tone adjust (all default to no-op). temperature is a warm/cool nudge of the
     # white point (ZEN ±1 ≈ ±10 K); temperature_k is its per-step gain (calibration knob).
     temperature: float = 0.0

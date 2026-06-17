@@ -804,7 +804,8 @@ def _param_summary(cfg: Config) -> list[tuple[str, str]]:
                    f"sat_min={cfg.tissue.sat_min}, adaptive={cfg.tissue.adaptive}"),
         ("stages", f"artifact={cfg.artifact.enabled}, fold={cfg.fold.enabled} "
                    f"(exclude_from_tissue={cfg.fold.exclude_from_tissue}), edge={cfg.edge.enabled}"),
-        ("whitebalance", f"scope={cfg.whitebalance.scope}, temp={cfg.whitebalance.temperature:g}, "
+        ("whitebalance", f"auto={cfg.whitebalance.auto}, scope={cfg.whitebalance.scope}, "
+                         f"temp={cfg.whitebalance.temperature:g}, "
                          f"tone(b/c/g)={cfg.whitebalance.brightness:g}/{cfg.whitebalance.contrast:g}/"
                          f"{cfg.whitebalance.gamma:g}"),
         ("resolution", f"process_zoom={cfg.process_zoom}, overview={cfg.overview_um_per_px}um/px, "
@@ -978,7 +979,8 @@ def _build_config_snapshot(cfg: Config, rows: list[dict]) -> dict:
                     "sabg_candidate_alpha": cfg.overlay.sabg_candidate_alpha,
                     "masked_color": list(cfg.overlay.masked_color),
                     "masked_alpha": cfg.overlay.masked_alpha},
-        "whitebalance": {"scope": cfg.whitebalance.scope,
+        "whitebalance": {"auto": cfg.whitebalance.auto,
+                         "scope": cfg.whitebalance.scope,
                          "white_point": (list(cfg.whitebalance.white_point)
                                          if cfg.whitebalance.white_point is not None else None),
                          "bright_frac": cfg.whitebalance.bright_frac,

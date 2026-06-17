@@ -457,14 +457,28 @@ SIZING_FIELDS = [
     ("", "full_debug", "bool", "full_debug", "Write extra debug artifacts."),
 ]
 WHITEBALANCE_FIELDS = [
+    ("whitebalance", "auto", "bool", "auto",
+     "Estimate the white point automatically (on). Off = manual: use a picked white point "
+     "(the Preview 'pick white' pipette, or white_point below for global)."),
     ("whitebalance", "scope", "choice", "scope",
-     "White-point consistency (display/figures only): image = each self-balances; "
-     "section = one per section; global = fixed white_point for comparable figures.",
+     "Where the white point comes from + how widely it's shared (display/figures only): "
+     "image = the viewed image self-balances; section = one per section (its overview), reused "
+     "for all its ROIs; global = one for the whole loaded dataset.",
      ["image", "section", "global"]),
     ("whitebalance", "bright_frac", "float", "bright_frac",
-     "Fraction of the brightest pixels averaged as the white point (display/figures only)."),
+     "Fraction of the brightest pixels averaged as the white point (auto estimate)."),
     ("whitebalance", "target", "float", "target",
      "Channel value the white point is scaled to (near-white)."),
+    ("whitebalance", "temperature", "float", "temperature",
+     "Warm(+)/cool(-) nudge of the white point. ZEN ±1 ≈ ±10 K."),
+    ("whitebalance", "temperature_k", "float", "temperature_k",
+     "Per-step gain of `temperature` (calibration knob; flip its sign if warm reads cool)."),
+    ("whitebalance", "brightness", "float", "brightness",
+     "Display tone: additive brightness on [0,1] after white balance (-1..1; 0 = no-op)."),
+    ("whitebalance", "contrast", "float", "contrast",
+     "Display tone: contrast about mid-grey (-1..1; 0 = no-op)."),
+    ("whitebalance", "gamma", "float", "gamma",
+     "Display tone: gamma, out = in**(1/gamma) (>0; 1 = no-op)."),
     ("whitebalance", "homogeneity_tol", "float", "homogeneity_tol",
      "Reserved: max RGB spread allowed for a manual white-point pick."),
 ]
