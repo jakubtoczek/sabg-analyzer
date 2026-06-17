@@ -59,17 +59,22 @@ def _glass_white_point(rgb: np.ndarray, percentile: float = 60.0) -> np.ndarray:
 
 
 def auto_white_point(rgb: np.ndarray, bright_frac: float = 0.2,
-                     neutralize: float = 0.0, glass_percentile: float = 60.0) -> np.ndarray:
+                     neutralize: float = 0.0, glass_percentile: float = 60.0,
+                     tissue: np.ndarray | None = None) -> np.ndarray:
     """Auto white point, blending the brightest-pixel estimate with the glass colour.
 
     *neutralize* in [0,1] interpolates between the mild brightest-pixel white point
     (0 -> original behaviour) and the dominant-glass colour (1 -> full background->white,
-    strongest de-cast). Higher values remove more of the yellow glass cast."""
+    strongest de-cast). Higher values remove more of the yellow glass cast. When a
+    *tissue* mask is given, the glass colour is taken from the **non-tissue** pixels
+    (``estimate_background``) — a cleaner glass sample than the whole frame, so the
+    de-cast is more accurate regardless of resolution."""
     mild = estimate_white_point(rgb, bright_frac)
     s = float(np.clip(neutralize, 0.0, 1.0))
     if s <= 0.0:
         return mild
-    glass = _glass_white_point(rgb, glass_percentile)
+    glass = (estimate_background(rgb, tissue, glass_percentile) if tissue is not None
+             else _glass_white_point(rgb, glass_percentile))
     return (1.0 - s) * mild + s * glass
 
 

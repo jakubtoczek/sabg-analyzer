@@ -168,6 +168,12 @@ class GuiParams:
     # whether the picker opens the selected thumb at higher resolution by default.
     preview_roi_cap_um: float = 1000.0
     preview_hi_res: bool = False
+    # Analyse the ROI with an outer margin (µm) read from the section but cropped away
+    # before display/quantification, so edge-sensitive detectors (fold ridges, tissue/edge
+    # morphology) get neighbourhood context and don't fail at the ROI border. The fold
+    # length gate is the longest scale, so ~fold.min_length_um covers it; 0 disables the
+    # margin. json-only knob (not in the menu — typical users won't touch it).
+    preview_roi_margin_um: float = 150.0
     # Default overlay-layer visibility in the Layers panel (Preview + Info). Only the
     # listed keys override the per-layer `default show` baked into `LAYER_SPEC`; any
     # layer not named here keeps its LAYER_SPEC default. Default flips the audit view to

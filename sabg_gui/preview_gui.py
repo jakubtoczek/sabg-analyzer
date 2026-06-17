@@ -41,6 +41,7 @@ from . import widgets as gw
 from .widgets import CanvasNav              # shared mouse-only canvas navigation
 from sabg_analyzer import export, overlay, preview, whitebalance
 from sabg_analyzer.config import load_config
+from sabg_analyzer.tissue import segment_tissue
 
 _VIEW_MULTS = [1, 2, 4, 8]          # thumb-resolution multipliers for the px/µm picker
 # Scale-bar corner labels (clear) -> the export.draw_scalebar position codes.
@@ -102,9 +103,11 @@ class PreviewWindow(tk.Toplevel):
 
         self.entry: preview.SectionEntry | None = None     # selected section
         self.disp_rgb: np.ndarray | None = None            # thumb/overview shown for ROI draw
-        self.roi_rgb: np.ndarray | None = None             # the opened full-res ROI
+        self.roi_rgb: np.ndarray | None = None             # the opened full-res ROI (display/quant)
         self.roi_px_um: float | None = None
         self.roi_rect: tuple[int, int, int, int] | None = None   # full-res (x,y,w,h)
+        self._roi_expanded: np.ndarray | None = None       # ROI + analysis margin (compute only)
+        self._roi_inset: tuple[int, int, int, int] | None = None  # (ox,oy,w,h) of ROI in expanded
         self.layers: dict | None = None
         # provenance of the result currently shown in the Result panel, so it can flag
         # when the view (section / ROI) has moved on since that result was computed.
@@ -310,6 +313,7 @@ class PreviewWindow(tk.Toplevel):
         self.roi_canvas = FigureCanvasTkAgg(self.roi_fig, master=tab)
         self.roi_canvas.get_tk_widget().pack(fill="both", expand=True)
         self.roi_nav = CanvasNav(self.roi_canvas, self.roi_ax,
+                                 can_left_pan=self._roi_can_pan,
                                  on_view_change=lambda: self._refresh_live_scalebar("roi"))
         self.wp_selector_roi = self._make_wp_selector(self.roi_ax)   # WB pipette (image scope)
         self._roi_hint()
@@ -320,9 +324,15 @@ class PreviewWindow(tk.Toplevel):
         return self.thumb_nav if source == "thumb" else self.roi_nav
 
     def _thumb_can_pan(self) -> bool:
-        """Left-drag pans the thumbnail unless a ROI is being drawn / brush is on."""
+        """Left-drag pans the thumbnail unless a ROI is being drawn / brush is on / a
+        white-point area is being picked (else the drag would pan, not select)."""
         sel = getattr(self, "selector", None)
-        return self.brush_mode is None and not (sel is not None and sel.get_active())
+        return (self.brush_mode is None and not self._wb_pick
+                and not (sel is not None and sel.get_active()))
+
+    def _roi_can_pan(self) -> bool:
+        """Left-drag pans the ROI unless a white-point area is being picked."""
+        return not self._wb_pick
 
     def _collapsible_strip(self, btn_parent: tk.Frame, strip_parent: tk.Frame,
                            label: str, after_widget: tk.Widget | None = None) -> tk.Frame:
@@ -522,9 +532,16 @@ class PreviewWindow(tk.Toplevel):
         wbp = self.cfg.whitebalance
         scope = getattr(wbp, "scope", "image")
         auto = getattr(wbp, "auto", True)
-        est = lambda r: whitebalance.auto_white_point(      # noqa: E731 (tiny local)
-            r, wbp.bright_frac, getattr(wbp, "neutralize", 0.0),
-            getattr(wbp, "glass_percentile", 60.0))
+        neut = getattr(wbp, "neutralize", 0.0)
+        def est(r):                                          # auto white point for image r
+            tis = None
+            if neut > 0.0:                                   # sample glass from non-tissue
+                try:
+                    tis = segment_tissue(r, self.cfg.tissue)
+                except Exception:
+                    tis = None
+            return whitebalance.auto_white_point(
+                r, wbp.bright_frac, neut, getattr(wbp, "glass_percentile", 60.0), tissue=tis)
         if scope == "global":
             if self._global_wp is None:
                 if not auto and wbp.white_point:
@@ -1436,13 +1453,26 @@ class PreviewWindow(tk.Toplevel):
         self.btn_open_roi.configure(
             state="normal" if (has_pending and not has_open) else "disabled")
 
+    def _roi_margin_px(self, scene) -> int:
+        """Analysis margin in full-res px from gui.preview_roi_margin_um (0 if unknown)."""
+        m_um = getattr(self.cfg.gui, "preview_roi_margin_um", 0.0)
+        if not m_um or not scene.pixel_size_um:
+            return 0
+        return max(0, int(round(m_um / scene.pixel_size_um)))
+
     def _read_roi(self, scene, rect):
         import pylibCZIrw.czi as pyczi
         x, y, w, h = rect
+        m = self._roi_margin_px(scene)             # read an outer margin for edge-safe analysis
+        ex = max(scene.x, x - m)
+        ey = max(scene.y, y - m)
+        ew = min(scene.x + scene.w, x + w + m) - ex
+        eh = min(scene.y + scene.h, y + h + m) - ey
         with self._czi_lock:                       # serialise CZI decodes (see __init__)
             with pyczi.open_czi(scene.path) as doc:
-                rgb = preview.read_roi(doc, x, y, w, h, 1.0)
-        return ("roi", rgb, scene.pixel_size_um)
+                big = preview.read_roi(doc, ex, ey, ew, eh, 1.0)
+        inset = (x - ex, y - ey, w, h)             # where the ROI sits inside the expanded crop
+        return ("roi", big, scene.pixel_size_um, inset)
 
     def clear_roi(self, refresh: bool = True) -> None:
         """Drop the current ROI and return to an editable thumbnail.
@@ -1458,6 +1488,8 @@ class PreviewWindow(tk.Toplevel):
         self.roi_rgb = None
         self.roi_px_um = None
         self.roi_rect = None
+        self._roi_expanded = None
+        self._roi_inset = None
         self.layers = None
         self.roi_nav.clear_home()
         self._wb_cache.pop("roi", None)
@@ -1535,7 +1567,10 @@ class PreviewWindow(tk.Toplevel):
                 manual = None
         cfg_snap = self._snapshot_cfg()
         excl = self._roi_exclude_crop()
-        self._submit(self._compute, self.roi_rgb, cfg_snap, self.roi_px_um, manual, excl,
+        # Analyse the margin-expanded crop (edge-safe), then crop layers back to the ROI.
+        rgb = self._roi_expanded if self._roi_expanded is not None else self.roi_rgb
+        inset = self._roi_inset or (0, 0, self.roi_rgb.shape[1], self.roi_rgb.shape[0])
+        self._submit(self._compute, rgb, cfg_snap, self.roi_px_um, manual, excl, inset,
                      tag="layers")
 
     def _snapshot_cfg(self):
@@ -1547,10 +1582,18 @@ class PreviewWindow(tk.Toplevel):
             detection=replace(c.detection), threshold=replace(c.threshold),
             overlay=replace(c.overlay))
 
-    def _compute(self, rgb, cfg, px_um, manual, exclude):
+    def _compute(self, rgb, cfg, px_um, manual, exclude, inset):
+        ox, oy, w, h = inset
+        if exclude is not None and (ox or oy or exclude.shape != rgb.shape[:2]):
+            padded = np.zeros(rgb.shape[:2], bool)     # the ROI exclusion, placed in the margin crop
+            padded[oy:oy + h, ox:ox + w] = exclude
+            exclude = padded
         layers = preview.compute_roi_layers(rgb, cfg, px_um, manual_thr=manual,
                                             exclude=exclude)
-        return ("layers", layers)
+        # crop every 2-D mask back to the ROI (margin was analysis context only); scalars pass through
+        out = {k: (v[oy:oy + h, ox:ox + w] if isinstance(v, np.ndarray) and v.ndim >= 2 else v)
+               for k, v in layers.items()}
+        return ("layers", out)
 
     # -- worker plumbing ---------------------------------------------------
     def _submit(self, fn, *args, tag="") -> None:
@@ -1592,7 +1635,11 @@ class PreviewWindow(tk.Toplevel):
                 elif kind == "display":
                     self._show_display(item[1])
                 elif kind == "roi":
-                    self.roi_rgb, self.roi_px_um = item[1], item[2]
+                    big, self.roi_px_um, inset = item[1], item[2], item[3]
+                    ox, oy, w, h = inset
+                    self._roi_expanded = big            # full crop incl. margin (compute only)
+                    self._roi_inset = inset
+                    self.roi_rgb = np.ascontiguousarray(big[oy:oy + h, ox:ox + w])
                     self._wb_cache.pop("roi", None)     # new ROI invalidates WB cache
                     self._set_draw_active(False)        # ROI fixed while open
                     self.nb.tab(self.roi_tab, state="normal")
