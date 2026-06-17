@@ -130,6 +130,16 @@ class PreviewWindow(tk.Toplevel):
         self.wb_on = tk.BooleanVar(value=False)            # raw <-> white-balanced display
         self._wb_cache: dict[str, tuple] = {}              # which -> (src_rgb, wb_rgb)
         self._section_wp: np.ndarray | None = None         # cached section white point (scope=section)
+        self.wb_pick_var = tk.BooleanVar(value=False)      # "pick white" pipette mode
+        self._wb_spots: list[np.ndarray] = []              # accumulated picked spot means (multi-spot)
+        # display tone (figures only; default no-op) — shared across both tabs' strips
+        _wb = self.cfg.whitebalance
+        self.tone_brightness = tk.DoubleVar(value=_wb.brightness)
+        self.tone_contrast = tk.DoubleVar(value=_wb.contrast)
+        self.tone_gamma = tk.DoubleVar(value=_wb.gamma)
+        self.tone_temp = tk.DoubleVar(value=_wb.temperature)
+        for _v in (self.tone_brightness, self.tone_contrast, self.tone_gamma, self.tone_temp):
+            _v.trace_add("write", lambda *_: self._on_tone_change())
         self.show_vars: dict[str, tk.BooleanVar] = {}
         self.field_vars: dict[tuple[str, str], tk.Variable] = {}
         self._photo_refs: list[tk.PhotoImage] = []         # keep picker thumbs alive
@@ -273,6 +283,8 @@ class PreviewWindow(tk.Toplevel):
         self.thumb_canvas.mpl_connect("button_release_event", self._on_brush_release)
         self.thumb_canvas.mpl_connect("axes_leave_event", self._on_brush_leave)
         self.thumb_canvas.mpl_connect("figure_leave_event", self._on_brush_leave)
+        # WB pipette: clicks sample a white point (only while "pick white" is on)
+        self.thumb_canvas.mpl_connect("button_press_event", self._on_pick_press)
 
     def _build_roi_tab(self) -> None:
         tab = tk.Frame(self.nb)
@@ -290,6 +302,7 @@ class PreviewWindow(tk.Toplevel):
         self.roi_canvas.get_tk_widget().pack(fill="both", expand=True)
         self.roi_nav = CanvasNav(self.roi_canvas, self.roi_ax,
                                  on_view_change=lambda: self._refresh_live_scalebar("roi"))
+        self.roi_canvas.mpl_connect("button_press_event", self._on_pick_press)  # WB pipette
         self._roi_hint()
         self.nb.tab(self.roi_tab, state="disabled")    # greyed until a ROI is opened
 
@@ -351,6 +364,18 @@ class PreviewWindow(tk.Toplevel):
         ttk.OptionMenu(bar, self.wb_scope, self.wb_scope.get(),
                        "image", "section", "global",
                        command=self._on_wb_scope).pack(side="left", padx=(0, 2))
+        # WB pipette: pick a white point off the image (sets scope=global); clear reverts.
+        tk.Checkbutton(bar, text="pick white", variable=self.wb_pick_var,
+                       command=self._on_wb_pick_toggle).pack(side="left", padx=(4, 0))
+        tk.Button(bar, text="clear", command=self._wb_clear_pick).pack(side="left", padx=(0, 2))
+        # tone/temperature live in a collapsed strip (rarely changed; default no-op)
+        tn = self._collapsible_strip(bar, strip_parent, "🎨 tone",
+                                     after_widget=after_widget)
+        self._tone_row(tn, "bright", self.tone_brightness, -1.0, 1.0)
+        self._tone_row(tn, "contr", self.tone_contrast, -1.0, 1.0)
+        self._tone_row(tn, "gamma", self.tone_gamma, 0.2, 3.0)
+        self._tone_row(tn, "temp", self.tone_temp, -10.0, 10.0)
+        tk.Button(tn, text="reset", command=self._reset_tone).pack(side="left", padx=(8, 2))
         # scale-bar controls live in a collapsed strip (rarely changed)
         sb = self._collapsible_strip(bar, strip_parent, "⚖ scale bar",
                                      after_widget=after_widget)
@@ -457,12 +482,13 @@ class PreviewWindow(tk.Toplevel):
         canvas.draw_idle()
 
     def _wb(self, rgb: np.ndarray, which: str) -> np.ndarray:
-        """White-balanced copy of *rgb* (cached per *which* by image identity)."""
+        """White-balanced + tone-adjusted copy of *rgb* (cached per *which* by image
+        identity). Uses the shared display pipeline so exports match the screen."""
         c = self._wb_cache.get(which)
         if c is not None and c[0] is rgb:
             return c[1]
-        out = whitebalance.white_balance(
-            rgb, self._white_point(rgb), target=self.cfg.whitebalance.target)
+        out = whitebalance.balance_for_display(
+            rgb, self.cfg.whitebalance, white_point=self._white_point(rgb))
         self._wb_cache[which] = (rgb, out)
         return out
 
@@ -503,6 +529,89 @@ class PreviewWindow(tk.Toplevel):
             self.thumb_canvas.draw_idle()
         if self.roi_rgb is not None and self.layers is not None:
             self._redraw()
+
+    # -- WB pipette (manual white-point pick; display-only) ----------------
+    def _on_wb_pick_toggle(self) -> None:
+        """Toggle the pipette. While on, clicks sample a white point; the exclusion
+        brush is forced off so the two click modes never fight."""
+        if self.wb_pick_var.get() and self.brush_mode is not None:
+            self.brush_var.set("off")
+            self._on_brush_mode()              # mirror the brush radio handler
+
+    def _on_pick_press(self, e) -> None:
+        """Sample the clicked pixel(s) as a manual white point (multi-click averages).
+        Picking implies 'use this everywhere', so it switches scope to global."""
+        if not self.wb_pick_var.get() or e.xdata is None:
+            return
+        if e.inaxes is self.thumb_ax:
+            src = self.disp_rgb
+        elif e.inaxes is self.roi_ax:
+            src = self.roi_rgb
+        else:
+            return
+        if src is None:
+            return
+        h, w = src.shape[:2]
+        cx, cy = int(round(e.xdata)), int(round(e.ydata))
+        x0, x1 = max(0, cx - 2), min(w, cx + 3)        # 5x5 window, clipped to image
+        y0, y1 = max(0, cy - 2), min(h, cy + 3)
+        self._wb_spots.append(src[y0:y1, x0:x1].reshape(-1, 3).astype(np.float32).mean(axis=0))
+        wp = np.mean(self._wb_spots, axis=0)
+        self.cfg.whitebalance.white_point = [float(v) for v in wp]
+        self.cfg.whitebalance.scope = "global"
+        self.wb_scope.set("global")
+        self._wb_cache.clear()
+        self._section_wp = None
+        self._params_dirty = True
+        if not self.wb_on.get():               # show the result immediately
+            self.wb_on.set(True)
+        self._on_wb_toggle()
+        self.status.configure(
+            text=f"white point = ({wp[0]:.0f},{wp[1]:.0f},{wp[2]:.0f}) "
+                 f"from {len(self._wb_spots)} spot(s)")
+
+    def _wb_clear_pick(self) -> None:
+        """Forget the picked spots and revert to per-image (scope=image)."""
+        self._wb_spots.clear()
+        self.cfg.whitebalance.white_point = None
+        self.cfg.whitebalance.scope = "image"
+        self.wb_scope.set("image")
+        self._wb_cache.clear()
+        self._section_wp = None
+        self._params_dirty = True
+        if self.wb_on.get():
+            self._on_wb_toggle()
+        self.status.configure(text="white point cleared")
+
+    # -- WB tone / temperature (display-only) ------------------------------
+    def _tone_row(self, parent, text, var, lo, hi) -> None:
+        """Label + Scale + live numeric readout for one tone var (shared across tabs)."""
+        tk.Label(parent, text=text).pack(side="left", padx=(8, 0))
+        ttk.Scale(parent, from_=lo, to=hi, variable=var, length=70).pack(side="left")
+        val = tk.Label(parent, width=4)
+        var.trace_add("write", lambda *_a, v=var, w=val: w.configure(text=f"{v.get():.2f}"))
+        val.configure(text=f"{var.get():.2f}")
+        val.pack(side="left")
+
+    def _on_tone_change(self) -> None:
+        """Push the tone/temperature vars into cfg and re-apply WB (display-only)."""
+        wb = self.cfg.whitebalance
+        wb.brightness = float(self.tone_brightness.get())
+        wb.contrast = float(self.tone_contrast.get())
+        wb.gamma = float(self.tone_gamma.get())
+        wb.temperature = float(self.tone_temp.get())
+        self._wb_cache.clear()
+        self._section_wp = None
+        self._params_dirty = True
+        if self.wb_on.get():
+            self._on_wb_toggle()
+
+    def _reset_tone(self) -> None:
+        """Back to a no-op tone curve (the setters re-apply via the var traces)."""
+        self.tone_brightness.set(0.0)
+        self.tone_contrast.set(0.0)
+        self.tone_gamma.set(1.0)
+        self.tone_temp.set(0.0)
 
     # -- layers panel gating (ROI tab only) --------------------------------
     def _iter_descendants(self, w):
@@ -1529,7 +1638,8 @@ class PreviewWindow(tk.Toplevel):
                 scalebar_label=self.sb_label.get(), wb=True, target_um=target,
                 wb_bright_frac=self.cfg.whitebalance.bright_frac,
                 wb_target=self.cfg.whitebalance.target,
-                wb_white_point=self._white_point(rgb))   # match the on-screen WB (scope-aware)
+                wb_white_point=self._white_point(rgb),   # match the on-screen WB (scope-aware)
+                wbp=self.cfg.whitebalance)               # + temperature/tone like the preview
             self.status.configure(
                 text=f"exported {len(written)} preset(s) → {base.parent}")
             messagebox.showinfo("Exported", "Wrote:\n" + "\n".join(p.name for p in written),
