@@ -804,8 +804,8 @@ def _param_summary(cfg: Config) -> list[tuple[str, str]]:
                    f"sat_min={cfg.tissue.sat_min}, adaptive={cfg.tissue.adaptive}"),
         ("stages", f"artifact={cfg.artifact.enabled}, fold={cfg.fold.enabled} "
                    f"(exclude_from_tissue={cfg.fold.exclude_from_tissue}), edge={cfg.edge.enabled}"),
-        ("whitebalance", f"auto={cfg.whitebalance.auto}, scope={cfg.whitebalance.scope}, "
-                         f"temp={cfg.whitebalance.temperature:g}, "
+        ("whitebalance", f"auto={cfg.whitebalance.auto}, neutralize={cfg.whitebalance.neutralize:g}, "
+                         f"scope={cfg.whitebalance.scope}, temp={cfg.whitebalance.temperature:g}, "
                          f"tone(b/c/g)={cfg.whitebalance.brightness:g}/{cfg.whitebalance.contrast:g}/"
                          f"{cfg.whitebalance.gamma:g}"),
         ("resolution", f"process_zoom={cfg.process_zoom}, overview={cfg.overview_um_per_px}um/px, "
@@ -980,6 +980,8 @@ def _build_config_snapshot(cfg: Config, rows: list[dict]) -> dict:
                     "masked_color": list(cfg.overlay.masked_color),
                     "masked_alpha": cfg.overlay.masked_alpha},
         "whitebalance": {"auto": cfg.whitebalance.auto,
+                         "neutralize": cfg.whitebalance.neutralize,
+                         "glass_percentile": cfg.whitebalance.glass_percentile,
                          "scope": cfg.whitebalance.scope,
                          "white_point": (list(cfg.whitebalance.white_point)
                                          if cfg.whitebalance.white_point is not None else None),

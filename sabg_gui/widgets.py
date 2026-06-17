@@ -467,6 +467,11 @@ WHITEBALANCE_FIELDS = [
      ["image", "section", "global"]),
     ("whitebalance", "bright_frac", "float", "bright_frac",
      "Fraction of the brightest pixels averaged as the white point (auto estimate)."),
+    ("whitebalance", "neutralize", "float", "neutralize",
+     "Auto de-cast strength 0..1: 0 = mild (brightest pixels); 1 = map the dominant glass "
+     "colour fully to white (removes more of the yellow background cast)."),
+    ("whitebalance", "glass_percentile", "float", "glass_percentile",
+     "Per-channel percentile that defines the 'glass' colour used when neutralize > 0."),
     ("whitebalance", "target", "float", "target",
      "Channel value the white point is scaled to (near-white)."),
     ("whitebalance", "temperature", "float", "temperature",

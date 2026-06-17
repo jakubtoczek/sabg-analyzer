@@ -128,7 +128,8 @@ class PreviewWindow(tk.Toplevel):
         self.sb_live = tk.BooleanVar(value=False)          # draw a live (non-burned) bar on the image
         self._sb_live_artist: dict = {"thumb": None, "roi": None}  # per-axis AnchoredSizeBar
         self.wb_on = tk.BooleanVar(value=False)            # raw <-> white-balanced display
-        self.wb_auto = tk.BooleanVar(value=True)           # auto estimate (default) vs manual pick
+        self.wb_auto = tk.BooleanVar(                      # auto estimate (default) vs manual pick
+            value=getattr(self.cfg.whitebalance, "auto", True))
         self._wb_cache: dict[str, tuple] = {}              # which -> (src_rgb, wb_rgb)
         self._section_wp: np.ndarray | None = None         # cached section white point (scope=section)
         self._global_wp: np.ndarray | None = None          # cached dataset white point (scope=global)
@@ -143,6 +144,9 @@ class PreviewWindow(tk.Toplevel):
         self.tone_temp = tk.DoubleVar(value=_wb.temperature)
         for _v in (self.tone_brightness, self.tone_contrast, self.tone_gamma, self.tone_temp):
             _v.trace_add("write", lambda *_: self._on_tone_change())
+        # auto de-cast strength (0 = mild brightest-px, 1 = glass->white); changes the white point
+        self.wb_neutralize = tk.DoubleVar(value=getattr(_wb, "neutralize", 0.0))
+        self.wb_neutralize.trace_add("write", lambda *_: self._on_wb_neutralize())
         self.show_vars: dict[str, tk.BooleanVar] = {}
         self.field_vars: dict[tuple[str, str], tk.Variable] = {}
         self._photo_refs: list[tk.PhotoImage] = []         # keep picker thumbs alive
@@ -375,8 +379,10 @@ class PreviewWindow(tk.Toplevel):
         ttk.OptionMenu(wbs, self.wb_scope, self.wb_scope.get(),
                        "image", "section", "global",
                        command=self._on_wb_scope).pack(side="left", padx=(0, 2))
-        # sticky "pick white" toggle (like Draw ROI); enabled only when WB on + Auto off
-        btn_pick = tk.Button(wbs, text="pick white", command=self.on_pick_white)
+        # auto de-cast strength: 0 = mild (brightest px), 1 = map the glass fully to white
+        self._tone_row(wbs, "neut", self.wb_neutralize, 0.0, 1.0)
+        # sticky "pick white area" toggle (like Draw ROI); enabled only when WB on + Auto off
+        btn_pick = tk.Button(wbs, text="pick white area", command=self.on_pick_white)
         btn_pick.pack(side="left", padx=(4, 0))
         self._pick_btns.append(btn_pick)
         self.btn_pick_white = btn_pick
@@ -516,14 +522,15 @@ class PreviewWindow(tk.Toplevel):
         wbp = self.cfg.whitebalance
         scope = getattr(wbp, "scope", "image")
         auto = getattr(wbp, "auto", True)
-        bf = wbp.bright_frac
+        est = lambda r: whitebalance.auto_white_point(      # noqa: E731 (tiny local)
+            r, wbp.bright_frac, getattr(wbp, "neutralize", 0.0),
+            getattr(wbp, "glass_percentile", 60.0))
         if scope == "global":
             if self._global_wp is None:
                 if not auto and wbp.white_point:
                     self._global_wp = np.asarray(wbp.white_point, np.float32)
                 else:
-                    ref = self.disp_rgb if self.disp_rgb is not None else rgb
-                    self._global_wp = whitebalance.estimate_white_point(ref, bf)
+                    self._global_wp = est(self.disp_rgb if self.disp_rgb is not None else rgb)
             return self._global_wp
         if scope == "section":
             if self._section_wp is None:
@@ -532,12 +539,12 @@ class PreviewWindow(tk.Toplevel):
                 if pick is not None:
                     self._section_wp = np.asarray(pick, np.float32)
                 elif self.disp_rgb is not None:
-                    self._section_wp = whitebalance.estimate_white_point(self.disp_rgb, bf)
+                    self._section_wp = est(self.disp_rgb)
             if self._section_wp is not None:
                 return self._section_wp
         if not auto and self._image_wp is not None:    # image scope, manual
             return np.asarray(self._image_wp, np.float32)
-        return whitebalance.estimate_white_point(rgb, bf)
+        return est(rgb)
 
     def _on_wb_scope(self, _v=None) -> None:
         """Switch the white-balance scope and refresh the WB display (display-only)."""
@@ -555,6 +562,14 @@ class PreviewWindow(tk.Toplevel):
             self._set_pick_active(False)
         self._reset_wp_caches()
         self._update_pick_state()
+        if self.wb_on.get():
+            self._on_wb_toggle()
+        self._params_dirty = True
+
+    def _on_wb_neutralize(self, _v=None) -> None:
+        """Auto de-cast strength changed: re-estimate the (auto) white points + re-balance."""
+        self.cfg.whitebalance.neutralize = float(self.wb_neutralize.get())
+        self._reset_wp_caches()                # neutralize changes the estimated white point
         if self.wb_on.get():
             self._on_wb_toggle()
         self._params_dirty = True

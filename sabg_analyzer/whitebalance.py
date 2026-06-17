@@ -44,18 +44,49 @@ def estimate_white_point(rgb: np.ndarray, bright_frac: float = 0.2) -> np.ndarra
     return rgb[sel].astype(np.float32).mean(axis=0)
 
 
+def _glass_white_point(rgb: np.ndarray, percentile: float = 60.0) -> np.ndarray:
+    """Dominant glass colour = per-channel *percentile* of the non-near-black pixels.
+
+    Unlike ``estimate_white_point`` (the brightest pixels, which are nearly neutral and
+    so under-correct), this lands on the bulk yellowish glass, so mapping it to white
+    removes the background cast more strongly. Mirrors ``estimate_background`` without
+    needing a tissue mask (glass dominates the frame)."""
+    pix = rgb.reshape(-1, 3).astype(np.float32)
+    pix = pix[pix.max(axis=1) > 30]                 # drop near-black mosaic gaps
+    if len(pix) < 100:
+        return np.array([245.0, 245.0, 245.0], np.float32)
+    return np.percentile(pix, percentile, axis=0).astype(np.float32)
+
+
+def auto_white_point(rgb: np.ndarray, bright_frac: float = 0.2,
+                     neutralize: float = 0.0, glass_percentile: float = 60.0) -> np.ndarray:
+    """Auto white point, blending the brightest-pixel estimate with the glass colour.
+
+    *neutralize* in [0,1] interpolates between the mild brightest-pixel white point
+    (0 -> original behaviour) and the dominant-glass colour (1 -> full background->white,
+    strongest de-cast). Higher values remove more of the yellow glass cast."""
+    mild = estimate_white_point(rgb, bright_frac)
+    s = float(np.clip(neutralize, 0.0, 1.0))
+    if s <= 0.0:
+        return mild
+    glass = _glass_white_point(rgb, glass_percentile)
+    return (1.0 - s) * mild + s * glass
+
+
 def resolve_white_point(rgb: np.ndarray, wbp) -> np.ndarray:
     """White point to use for *rgb* given a WhiteBalanceParams *wbp*, honouring
     ``wbp.scope`` for cross-image consistency:
 
     - ``global`` + ``wbp.white_point`` set -> that fixed point (comparable figures);
-    - otherwise the per-image estimate (``bright_frac``). ``section`` scope is handled
-      by the caller (it supplies the section's own white point); here it falls back to
-      per-image so batch/export stay self-balancing unless a global point is set.
+    - otherwise the per-image auto estimate (``bright_frac`` + ``neutralize``). ``section``
+      scope is handled by the caller; here it falls back to per-image so batch/export stay
+      self-balancing unless a global point is set.
     """
     if getattr(wbp, "scope", "image") == "global" and getattr(wbp, "white_point", None):
         return np.asarray(wbp.white_point, np.float32)
-    return estimate_white_point(rgb, wbp.bright_frac)
+    return auto_white_point(rgb, wbp.bright_frac,
+                            getattr(wbp, "neutralize", 0.0),
+                            getattr(wbp, "glass_percentile", 60.0))
 
 
 def apply_temperature(wp: np.ndarray, delta: float, k: float = 0.02) -> np.ndarray:
@@ -122,4 +153,14 @@ if __name__ == "__main__":  # ponytail: smallest self-check for the new tone/tem
     assert np.allclose(apply_temperature(wp, 0), wp), "delta=0 is identity"
     warm = apply_temperature(wp, +2)                  # warmer -> smaller red wp -> bigger red gain
     assert (250.0 / warm)[0] > (250.0 / wp)[0] > (250.0 / warm)[2], "warm raises red gain, cuts blue"
+    # auto_white_point: yellow glass image (R>G>B). neutralize=0 == brightest estimate;
+    # neutralize>0 pulls the white point toward the (yellower) glass -> lower blue -> more blue gain.
+    rng = np.random.default_rng(1)
+    glassy = rng.integers(0, 60, (80, 80, 3), dtype=np.uint8)            # dark "tissue"
+    glassy[:60] = np.array([225, 215, 185], np.uint8)                    # majority yellow glass
+    glassy[:6, :6] = np.array([250, 249, 246], np.uint8)                 # a little bright fill
+    mild = auto_white_point(glassy, neutralize=0.0)
+    full = auto_white_point(glassy, neutralize=1.0)
+    assert np.array_equal(mild, estimate_white_point(glassy)), "neutralize=0 is the old estimate"
+    assert full[2] < mild[2], "neutralize>0 lowers the blue white point (stronger de-cast)"
     print("whitebalance self-check OK")
