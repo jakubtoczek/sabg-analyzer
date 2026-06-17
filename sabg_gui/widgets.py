@@ -347,14 +347,18 @@ LAYER_SPEC = [
 ]
 LAYER_LABELS = {"nontissue": "non-tissue", "excluded": "excluded", "artifact": "artifact",
                 "fold": "fold", "sabg_candidate": "candidate SABG+", "sabg": "SABG+",
-                "edge_removed": "edge-rejected"}
+                "edge_removed": "edge-rejected", "masked": "masked (grouped)"}
 
 # The Layers *panel* lists layers in its own order (decoupled from the composite z-order above):
-# excluded, non-tissue, candidate, artifact, fold, edge, final SABG+.
+# excluded, non-tissue, candidate, artifact, fold, edge, final SABG+, then the grouped
+# "masked" union (default OFF — it's the clean 2-layer alternative to the individual layers,
+# the same grey union the default section figure draws). `masked` is panel-only, not in
+# LAYER_SPEC; `_overlay_order` paints its union explicitly.
 _LAYER_BY_KEY = {s[0]: s for s in LAYER_SPEC}
 LAYER_PANEL_SPEC = [_LAYER_BY_KEY[k] for k in
                     ("excluded", "nontissue", "sabg_candidate", "artifact",
-                     "fold", "edge_removed", "sabg")]
+                     "fold", "edge_removed", "sabg")] + [
+                    ("masked", "masked_color", "masked_alpha", False)]
 
 # ---------------------------------------------------------------------------
 # "Slider setup" mode: one guided sensitivity bar per layer.
@@ -484,6 +488,17 @@ INTENSITY_FIELDS = [
      "intensity-weighted analogue of %SABG (stain amount normalised to tissue, not just "
      "positives). Requires 'enabled'; has no effect on its own."),
 ]
+REPORT_FIELDS = [
+    ("report", "metadata", "bool", "metadata",
+     "Write metadata.csv: a human digest of the run (analysis settings + timing + version) "
+     "plus the CZI acquisition metadata (microscope/objective/NA/etc.)."),
+    ("report", "details", "bool", "details",
+     "Write results_detailed.csv: per-section image dims, per-layer px/areas, the pos∩fold "
+     "intersection, and intensities (everything already computed)."),
+    ("report", "workbook", "bool", "workbook",
+     "Write results.xlsx bundling results / metadata / details into one workbook (tabs)."),
+    ("report", "workbook_name", "str", "workbook_name", "Filename for the bundled workbook."),
+]
 PROGRESS_FIELDS = [
     ("progress", "section", "bool", "section", "Show per-section progress."),
     ("progress", "total", "bool", "total", "Show overall progress."),
@@ -514,6 +529,9 @@ OTHER_GROUPS = [
     ("Canvas sizing", SIZING_FIELDS,
      "How big each working canvas is (µm/px, proportional to physical size, with px caps)."),
     ("Output artifacts", OUTPUT_FIELDS, "Which files analyze/export write."),
+    ("Run report", REPORT_FIELDS,
+     "Optional companion tables: metadata.csv (run params + timing + CZI acquisition), "
+     "results_detailed.csv, and a bundled results.xlsx workbook."),
     ("Intensity quantification", INTENSITY_FIELDS,
      "Optional OD-weighted intensity columns in results.csv (stain amount): "
      "integrated/mean OD over positives, plus per-tissue OD. %SABG by area is unaffected."),

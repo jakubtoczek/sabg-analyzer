@@ -221,6 +221,8 @@ overlay:
   excluded_alpha: 0.55         # exclusion blend strength (0-1)
   sabg_candidate_color: [0, 180, 180]  # pre-rejection SABG+ audit layer (cyan)
   sabg_candidate_alpha: 0.45   # candidate blend (0-1); default-on primary audit layer
+  masked_color: [128, 128, 128]  # grouped "masked" layer = non-tissue+excluded+artifact+fold merged (grey)
+  masked_alpha: 0.50           # grouped masked blend (0-1); used by the default wb_overlaymask section figure
 
 # ---- White balance (display/figures only; quantification uses raw pixels) --
 whitebalance:
@@ -243,6 +245,22 @@ output:
   log_files: true   # log the files written at each step (scan/analyze/export)
   run_log: true   # also tee the console output to a timestamped log file in --out
   run_log_name: "%Y%m%d-%H%M_run.log"   # strftime template, e.g. 20260604-1600_run.log
+
+# ---- Run report (metadata + detailed tables) -------------------------------
+# results.csv and config.yaml are ALWAYS written. These add optional companion
+# tables. metadata.csv is a human digest of the run (analysis settings + timing +
+# version) plus the CZI acquisition metadata (microscope/objective/NA/etc., see
+# misc/screenshots/5.jpg). results_detailed.csv is a per-section breakdown
+# (image dims, per-layer px/areas, pos∩fold, intensities). results.xlsx bundles
+# results / metadata / details into one workbook. Empty allowlists = "everything".
+report:
+  metadata: true            # write metadata.csv + workbook 'metadata' tab
+  details: false            # write results_detailed.csv + 'details' tab
+  workbook: true            # write results.xlsx (results [+metadata] [+details] tabs)
+  workbook_name: results.xlsx
+  metadata_blocks: [run, params, acquisition]   # which scopes to include
+  acquisition_fields: []    # [] = every acquisition field found; else an allowlist
+  detail_columns: []        # [] = all detail columns; else an allowlist
 
 # ---- Progress / ETA report -------------------------------------------------
 # A single live line re-actualises in place for the current section, then moves
@@ -323,12 +341,14 @@ export:
   # Sized by a FIXED magnification (section_um_per_px) so each figure is proportional
   # to its source section. A variant is underscore-joined tokens:
   #   base     raw | wb
-  #   overlay  overlay (all layers) | overlaysabg (SABG positives only)
+  #   overlay  overlaymask (grouped grey masked + SABG+, the clean default) |
+  #            overlay (every layer in its own colour) | overlaysabg (SABG positives only)
   #   fov      numbered dashed FOV boxes
   #   scalebar burned-in adaptive scale bar
-  # e.g. wb_overlaysabg_scalebar, raw_scalebar. (Legacy wb/wb_overlay/wb_overlay_fov ok.)
+  # e.g. wb_overlay_fov_scalebar (detailed), wb_overlaysabg_scalebar, raw_scalebar.
+  # (Legacy wb/wb_overlay/wb_overlay_fov ok.)
   section_figures: true
-  sec_variants: [raw, wb_scalebar, wb_overlay_fov_scalebar]
+  sec_variants: [raw, wb_scalebar, wb_overlaymask_fov_scalebar]
   sec_formats: [jpg]
   section_um_per_px: 3.0   # section-figure resolution (µm/px); match maps_um_per_px for
                            # 1:1 overlay masks; smaller = bigger/crisper image (more RAM)

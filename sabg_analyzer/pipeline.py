@@ -146,21 +146,27 @@ def _project(canvas, mask, off_x, off_y, tw, th, scale):
 def _load_exclude_mask(cfg: Config, out_dir: Path, scene: SceneInfo):
     """The scene's manual exclusion mask as a native-size bool array, or None.
 
-    Stored proportional to the scene bounding box, so it upsamples linearly to any
-    working canvas (nearest); see `Config.scene_exclude_mask`."""
+    Path resolution mirrors the preview GUI (`preview_gui._roi_exclude_crop`): an
+    explicit ``scenes.<key>.exclude_mask`` wins; otherwise fall back to the convention
+    path ``exclude/<slug>.png`` so a mask drawn + saved in the GUI is honoured even
+    when the config doesn't reference it. Stored proportional to the scene bounding
+    box, so it upsamples linearly to any working canvas (nearest)."""
     rel = cfg.scene_exclude_mask(scene.key)
+    explicit = bool(rel)
     if not rel:
-        return None
+        rel = f"exclude/{scene.slug}.png"        # GUI convention fallback
     p = Path(out_dir) / rel
     if not p.exists():
-        print(f"        {scene.key}: exclude_mask '{rel}' not found, ignoring")
+        if explicit:                             # referenced but missing -> warn
+            print(f"        {scene.key}: exclude_mask '{rel}' not found, ignoring")
         return None
     m = cv2.imread(str(p), cv2.IMREAD_GRAYSCALE)
     return None if m is None else (m > 127)
 
 
 def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
-                  alias: str | None = None, progress=None) -> dict:
+                  alias: str | None = None, progress=None,
+                  details_sink: list | None = None) -> dict:
     z = cfg.process_zoom
     alias = alias or scene.slug
     n_tiles = scene_tile_count(scene.w, scene.h, cfg.tile_size)
@@ -189,11 +195,14 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
     # Manual exclusion mask (preview-drawn): drop the marked region from BOTH the
     # numerator and denominator everywhere downstream (tiles derive from these).
     excl = _load_exclude_mask(cfg, out_dir, scene)
+    excl_px_ov = 0                       # tissue px removed by the mask (overview canvas)
     if excl is not None:
         ex_ov = cv2.resize(excl.astype(np.uint8), (W, H),
                            interpolation=cv2.INTER_NEAREST).astype(bool)
+        excl_px_ov = int((ov_tissue & ex_ov).sum())
         ov_tissue = ov_tissue & ~ex_ov
         ov_tissue_count = ov_tissue_count & ~ex_ov
+        print(f"        {scene.key}: exclusion applied ({excl_px_ov:,} overview px removed)")
 
     # higher-res canvas for overlays + maps (decoupled from the gating overview).
     hd_rgb, hd_scale = czi_io.read_overview(
@@ -414,6 +423,13 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
         edge_mm2 = edge_px * mm2
     else:
         tissue_mm2 = sabg_mm2 = artifact_mm2 = fold_mm2 = edge_mm2 = None
+    # Manual exclusion is measured on the coarse overview gating canvas; report it
+    # physically (mm²) and as the equivalent processed-px count so excluded_px sits on
+    # the same scale as tissue_px (tissue_px already has the mask subtracted).
+    ov_um_per_px = (scene.pixel_size_um / scale) if (scene.pixel_size_um and scale) else None
+    excluded_mm2 = (excl_px_ov * (ov_um_per_px / 1000.0) ** 2) if ov_um_per_px else None
+    excluded_px = (round(excluded_mm2 / mm2)
+                   if (excluded_mm2 is not None and px_um) else excl_px_ov)
 
     # HD fold band (overview mask upsampled) for overlay / maps.
     hd_fold = (cv2.resize(ov_fold.astype(np.uint8), (Wh, Hh),
@@ -483,9 +499,10 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
     row.update({
         "tissue_px": tissue_px, "positive_px": positive_px,
         "artifact_px": artifact_px, "fold_px": fold_px, "edge_px": edge_px,
+        "excluded_px": excluded_px,
         "tissue_area_mm2": tissue_mm2, "sabg_area_mm2": sabg_mm2,
         "artifact_area_mm2": artifact_mm2, "fold_area_mm2": fold_mm2,
-        "edge_area_mm2": edge_mm2,
+        "edge_area_mm2": edge_mm2, "excluded_area_mm2": excluded_mm2,
         "threshold": round(float(thr), 5),
         "threshold_secondary": (round(float(thr_s), 5) if thr_s is not None else None),
         "threshold_method": "override" if thr_override is not None else cfg.threshold.method,
@@ -494,6 +511,31 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
         "pixel_size_um": scene.pixel_size_um, "process_zoom": z,
         "analyzer_version": __version__,
     })
+
+    # Optional detailed breakdown (report.details): image dims + per-layer px/areas +
+    # the pos∩fold intersection + intensities — all from quantities already computed.
+    if details_sink is not None and cfg.report.details:
+        hd_um = (scene.pixel_size_um / hd_scale) if (scene.pixel_size_um and hd_scale) else None
+        pf_px_hd = int(hd_pos_fold.sum())
+        pf_mm2 = pf_px_hd * (hd_um / 1000.0) ** 2 if hd_um else None
+        bbox_mm2 = (scene.w * scene.h * (scene.pixel_size_um / 1000.0) ** 2
+                    if scene.pixel_size_um else None)
+        details_sink.append({
+            "key": scene.key, "alias": alias,
+            "section_w_px": scene.w, "section_h_px": scene.h,
+            "section_bbox_mm2": bbox_mm2,
+            "tissue_px": tissue_px, "positive_px": positive_px,
+            "artifact_px": artifact_px, "fold_px": fold_px,
+            "edge_px": edge_px, "excluded_px": excluded_px,
+            "tissue_area_mm2": tissue_mm2, "sabg_area_mm2": sabg_mm2,
+            "artifact_area_mm2": artifact_mm2, "fold_area_mm2": fold_mm2,
+            "edge_area_mm2": edge_mm2, "excluded_area_mm2": excluded_mm2,
+            "pos_in_fold_px": (round(pf_mm2 / mm2) if (pf_mm2 is not None and px_um) else pf_px_hd),
+            "pos_in_fold_area_mm2": pf_mm2,
+            "sabg_integrated_od": round(od_sum, 4) if cfg.intensity.enabled else None,
+            "sabg_mean_od": (round(od_sum / positive_px, 6)
+                             if (cfg.intensity.enabled and positive_px) else None),
+        })
     return row
 
 
@@ -510,9 +552,10 @@ def _empty_row(scene: SceneInfo, cfg: Config, alias: str | None = None) -> dict:
             row["sabg_od_per_tissue"] = 0.0
     row.update({
         "tissue_px": 0, "positive_px": 0,
-        "artifact_px": 0, "fold_px": 0, "edge_px": 0,
+        "artifact_px": 0, "fold_px": 0, "edge_px": 0, "excluded_px": 0,
         "tissue_area_mm2": 0.0, "sabg_area_mm2": 0.0,
         "artifact_area_mm2": 0.0, "fold_area_mm2": 0.0, "edge_area_mm2": 0.0,
+        "excluded_area_mm2": 0.0,
         "threshold": None, "threshold_secondary": None,
         "threshold_method": cfg.threshold.method,
         "require_agreement": cfg.detection.require_agreement,
@@ -675,8 +718,13 @@ def analyze(
         by_file.setdefault(path, []).append(s)
 
     rows: list[dict] = []
+    details: list[dict] = []                  # per-section detailed breakdown (report.details)
     results = out_dir / "results.csv"
     results.parent.mkdir(parents=True, exist_ok=True)
+
+    print("[params] analysis settings:")
+    for _k, _v in _param_summary(cfg):
+        print(f"          {_k}: {_v}")
 
     def _checkpoint() -> None:
         # Persist after each section so a Stop (or crash) keeps finished work;
@@ -690,7 +738,8 @@ def analyze(
             with pyczi.open_czi(str(path)) as doc:
                 for s in scenes:
                     row = analyze_scene(doc, s, cfg, out_dir,
-                                        alias=aliases.get(s.key), progress=bar)
+                                        alias=aliases.get(s.key), progress=bar,
+                                        details_sink=details)
                     if metadata:
                         md = metadata.get((s.file_stem, s.scene_index), {})
                         for c in LABEL_COLUMNS:
@@ -708,6 +757,8 @@ def analyze(
     analyze_secs = time.perf_counter() - t_start
     from .progress import _fmt
     print(f"[analyze] {len(rows)} sections -> {results}  (analysis {_fmt(analyze_secs)})")
+    if cfg.report.metadata or cfg.report.details or cfg.report.workbook:
+        _write_reports(out_dir, cfg, files, prior_rows + rows, details, analyze_secs)
 
     # Bundled export: one timed pipeline (analyze + figures). With export_on_analyze
     # off we still render the section overlays (do_fov=False) so there's always an
@@ -738,6 +789,92 @@ def _safe_to_csv(df: pd.DataFrame, path: Path) -> Path:
         df.to_csv(alt, index=False)
         print(f"  ! {path.name} is locked (open elsewhere?) -> wrote {alt.name} instead")
         return alt
+
+
+def _param_summary(cfg: Config) -> list[tuple[str, str]]:
+    """Synthetic, human-readable digest of the analysis-affecting settings. Shared by
+    the ``[params]`` run-log block and the ``params`` scope of metadata.csv. (The full
+    machine-readable config is always saved separately as config.yaml.)"""
+    return [
+        ("detection", f"{cfg.detection.primary}, require_agreement={cfg.detection.require_agreement}, "
+                      f"hysteresis={cfg.detection.hysteresis}"),
+        ("threshold", f"{cfg.threshold.method}, scale={cfg.threshold.scale}, "
+                      f"from_overview={cfg.threshold.from_overview}"),
+        ("tissue", f"gap_level={cfg.tissue.gap_level}, white_level={cfg.tissue.white_level}, "
+                   f"sat_min={cfg.tissue.sat_min}, adaptive={cfg.tissue.adaptive}"),
+        ("stages", f"artifact={cfg.artifact.enabled}, fold={cfg.fold.enabled} "
+                   f"(exclude_from_tissue={cfg.fold.exclude_from_tissue}), edge={cfg.edge.enabled}"),
+        ("whitebalance", f"scope={cfg.whitebalance.scope}"),
+        ("resolution", f"process_zoom={cfg.process_zoom}, overview={cfg.overview_um_per_px}um/px, "
+                       f"maps={cfg.maps_um_per_px}um/px"),
+    ]
+
+
+def _write_reports(out_dir: Path, cfg: Config, files: list, rows: list[dict],
+                   details: list[dict], analyze_secs: float) -> None:
+    """Write the optional run report(s): metadata.csv (run/params/acquisition), the
+    detailed per-section results_detailed.csv, and a bundled results.xlsx workbook.
+    Each is gated by ``cfg.report`` and content-customisable via its allowlists."""
+    import sys as _sys
+    import time
+    from .progress import _fmt
+    rp = cfg.report
+
+    meta_rows: list[dict] = []
+    if rp.metadata:
+        blocks = set(rp.metadata_blocks)
+        if "run" in blocks:
+            for k, v in (
+                ("timestamp", time.strftime("%Y-%m-%d %H:%M:%S %z")),
+                ("analyzer_version", __version__),
+                ("analysis_duration", _fmt(analyze_secs)),
+                ("sections", len(rows)),
+                ("command", " ".join(_sys.argv)),
+                ("out_dir", str(out_dir)),
+            ):
+                meta_rows.append({"scope": "run", "key": k, "value": v})
+        if "params" in blocks:
+            for k, v in _param_summary(cfg):
+                meta_rows.append({"scope": "params", "key": k, "value": v})
+        if "acquisition" in blocks:
+            allow = set(rp.acquisition_fields)
+            for path in files:
+                try:
+                    with pyczi.open_czi(str(path)) as doc:
+                        acq = czi_io.get_scan_metadata(doc.raw_metadata)
+                except Exception:
+                    acq = {}
+                for k, v in acq.items():
+                    if allow and k not in allow:
+                        continue
+                    meta_rows.append({"scope": f"file:{path.stem}", "key": k, "value": v})
+        if meta_rows:
+            _safe_to_csv(pd.DataFrame(meta_rows, columns=["scope", "key", "value"]),
+                         out_dir / "metadata.csv")
+            print(f"          + metadata.csv ({len(meta_rows)} rows)")
+
+    ddf = None
+    if rp.details and details:
+        ddf = pd.DataFrame(details)
+        if rp.detail_columns:          # allowlist (key/alias always kept)
+            keep = ["key", "alias"] + [c for c in rp.detail_columns]
+            ddf = ddf[[c for c in keep if c in ddf.columns]]
+        _safe_to_csv(ddf, out_dir / "results_detailed.csv")
+        print(f"          + results_detailed.csv ({len(ddf)} rows)")
+
+    if rp.workbook:
+        wb = out_dir / rp.workbook_name
+        try:
+            with pd.ExcelWriter(wb, engine="openpyxl") as xl:
+                pd.DataFrame(rows).to_excel(xl, sheet_name="results", index=False)
+                if meta_rows:
+                    pd.DataFrame(meta_rows, columns=["scope", "key", "value"]).to_excel(
+                        xl, sheet_name="metadata", index=False)
+                if ddf is not None:
+                    ddf.to_excel(xl, sheet_name="details", index=False)
+            print(f"          + {wb.name}")
+        except Exception as exc:       # a locked/old xlsx shouldn't fail the run
+            print(f"  ! workbook write failed: {exc}")
 
 
 def _build_config_snapshot(cfg: Config, rows: list[dict]) -> dict:
@@ -836,7 +973,9 @@ def _build_config_snapshot(cfg: Config, rows: list[dict]) -> dict:
                     "excluded_color": list(cfg.overlay.excluded_color),
                     "excluded_alpha": cfg.overlay.excluded_alpha,
                     "sabg_candidate_color": list(cfg.overlay.sabg_candidate_color),
-                    "sabg_candidate_alpha": cfg.overlay.sabg_candidate_alpha},
+                    "sabg_candidate_alpha": cfg.overlay.sabg_candidate_alpha,
+                    "masked_color": list(cfg.overlay.masked_color),
+                    "masked_alpha": cfg.overlay.masked_alpha},
         "whitebalance": {"scope": cfg.whitebalance.scope,
                          "white_point": (list(cfg.whitebalance.white_point)
                                          if cfg.whitebalance.white_point is not None else None),
@@ -850,6 +989,13 @@ def _build_config_snapshot(cfg: Config, rows: list[dict]) -> dict:
                    "log_files": cfg.output.log_files,
                    "run_log": cfg.output.run_log,
                    "run_log_name": cfg.output.run_log_name},
+        "report": {"metadata": cfg.report.metadata,
+                   "details": cfg.report.details,
+                   "workbook": cfg.report.workbook,
+                   "workbook_name": cfg.report.workbook_name,
+                   "metadata_blocks": list(cfg.report.metadata_blocks),
+                   "acquisition_fields": list(cfg.report.acquisition_fields),
+                   "detail_columns": list(cfg.report.detail_columns)},
         "progress": {"section": cfg.progress.section,
                      "total": cfg.progress.total,
                      "elapsed": cfg.progress.elapsed,

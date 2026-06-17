@@ -1438,6 +1438,17 @@ class PreviewWindow(tk.Toplevel):
             if shown(k):
                 occ = self.layers[k] if occ is None else (occ | self.layers[k])
         order = []
+        # Grouped grey "masked" layer (bottom): union of excluded+non-tissue+artifact+fold,
+        # the same view the default section figure draws. Default off; mirrors the export side.
+        mv = self.show_vars.get("masked")
+        if mv is not None and mv.get():
+            union = None
+            for k in ("excluded", "nontissue", "artifact", "fold"):
+                m = self.layers.get(k)
+                if m is not None:
+                    union = m if union is None else (union | m)
+            if union is not None:
+                order.append((union, tuple(ov.masked_color), float(ov.masked_alpha)))
         for key, color_attr, alpha_attr, _d in gw.LAYER_SPEC:
             if not shown(key):
                 continue

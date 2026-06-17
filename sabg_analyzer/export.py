@@ -73,7 +73,7 @@ class ExportParams:
     formats: tuple[str, ...] = ("jpg",)
     # Whole-section figures (downsampled, written to sections/<alias>_<variant>).
     section_figures: bool = True
-    sec_variants: tuple[str, ...] = ("raw", "wb_scalebar", "wb_overlay_fov_scalebar")
+    sec_variants: tuple[str, ...] = ("raw", "wb_scalebar", "wb_overlaymask_fov_scalebar")
     sec_formats: tuple[str, ...] = ("jpg",)
     section_um_per_px: float = 3.0  # section figure resolution (match maps_um_per_px)
     section_show_edge: bool = False  # draw blue edge-rejected pixels on section figures
@@ -183,7 +183,13 @@ def draw_dashed_rect(img, p1, p2, color, thickness=2, dash=14) -> None:
 OVERLAY_PROFILES = {
     "overlay": ["nontissue", "excluded", "artifact", "fold", "edge", "pos", "pos_fold"],
     "overlaysabg": ["pos", "pos_fold"],   # SABG positives only (incl. inside folds)
+    # Clean 2-layer publication view: everything masked/excluded merged into ONE grey
+    # union (`__masked__`) + SABG+ green on top. This is the default section figure.
+    "overlaymask": ["__masked__", "pos", "pos_fold"],
 }
+
+# Members merged into the grouped grey `__masked__` layer (drawn as a union, once).
+_MASKED_GROUP = ["nontissue", "excluded", "artifact", "fold", "edge"]
 
 
 def adaptive_bar_um(width_px: int, um_per_px: float, target_um: float = 1000.0) -> float:
@@ -204,7 +210,8 @@ def _section_figures(out_dir: Path, alias: str, doc, scene, ov_rgb, ov_tissue,
 
     Each ``p.sec_variants`` entry is a set of underscore-joined tokens:
       base      ``raw`` | ``wb``
-      overlay   ``overlay`` (all layers) | ``overlaysabg`` (SABG only)
+      overlay   ``overlaymask`` (grouped grey masked + SABG+, the default) |
+                ``overlay`` (all layers in their own colours) | ``overlaysabg`` (SABG only)
       ``fov``       numbered dashed FOV boxes
       ``scalebar``  burned-in adaptive scale bar (~1 mm, labelled by default)
     Legacy names (``wb``, ``wb_overlay``, ``wb_overlay_fov``) still parse.
@@ -262,6 +269,16 @@ def _section_figures(out_dir: Path, alias: str, doc, scene, ov_rgb, ov_tissue,
     def _profile_layers(profile):
         out = []
         for name in OVERLAY_PROFILES.get(profile, OVERLAY_PROFILES["overlay"]):
+            if name == "__masked__":     # grouped grey union of the masked layers
+                union = None
+                for m in _MASKED_GROUP:
+                    spec = layer_specs.get(m)
+                    if not gates.get(m, True) or spec is None or spec[0] is None:
+                        continue
+                    union = spec[0] if union is None else (union | spec[0])
+                if union is not None:
+                    out.append((union, cfg.overlay.masked_color, cfg.overlay.masked_alpha))
+                continue
             spec = layer_specs.get(name)
             if not gates.get(name, True) or spec is None or spec[0] is None:
                 continue

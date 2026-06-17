@@ -61,11 +61,25 @@ def get_pixel_size_um(raw_metadata: str) -> Optional[float]:
         return None
 
 
-def get_scan_metadata(raw_metadata: str) -> dict[str, str]:
-    """Best-effort scan metadata from the CZI XML (only found fields are returned).
+def _fmt_ms(ms: str) -> str:
+    """Format a millisecond duration string as ``H:MM:SS`` (best effort)."""
+    try:
+        s = float(ms) / 1000.0
+    except ValueError:
+        return ms
+    h, rem = divmod(int(s), 3600)
+    m, sec = divmod(rem, 60)
+    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
 
-    Pulls a few human-relevant items for the scan log: µm/px, objective
-    magnification, acquisition date, and channel/stain names.
+
+def get_scan_metadata(raw_metadata: str) -> dict[str, str]:
+    """Best-effort acquisition metadata from the CZI XML (only found fields returned).
+
+    Mirrors the per-section "Acquisition Information" panel in ZEN
+    (see ``misc/screenshots/5.jpg``): µm/px, magnification, objective + NA, bit depth,
+    acquisition date + duration, microscope, contrast method, light-source intensity,
+    flash duration, camera, binning, depth of focus, compression, channel names. Each
+    item is looked up independently so a missing tag just omits that key.
     """
     out: dict[str, str] = {}
     px = get_pixel_size_um(raw_metadata)
@@ -86,9 +100,33 @@ def get_scan_metadata(raw_metadata: str) -> dict[str, str]:
             or _first(r"<AcquisitionDate>([^<]+)</AcquisitionDate>"))
     if date:
         out["acquired"] = date
-    obj = _first(r"<ObjectiveName>([^<]+)</ObjectiveName>")
-    if obj:
-        out["objective"] = obj
+    dur = _first(r"<AcquisitionDuration>([^<]+)</AcquisitionDuration>")
+    if dur:
+        out["acquisition_duration"] = _fmt_ms(dur)
+    # simple single-value tags -> output key
+    for tag, key in (
+        ("ObjectiveName", "objective"),
+        ("LensNA", "effective_na"),
+        ("ComponentBitCount", "bit_depth"),
+        ("ContrastMethod", "contrast_method"),
+        ("IlluminationType", "illumination"),
+        ("FlashDuration", "flash_duration"),
+        ("CameraName", "camera"),
+        ("DepthOfFocus", "depth_of_focus"),
+        ("CompressionMethod", "compression"),
+    ):
+        v = _first(rf"<{tag}[^>]*>([^<]+)</{tag}>")
+        if v:
+            out[key] = v
+    mic = _first(r'<Microscope[^>]*\sName="([^"]+)"')
+    if mic:
+        out["microscope"] = mic
+    binning = _first(r"<Binning[^>]*>([^<]+)</Binning>")
+    if binning:
+        out["binning"] = binning
+    intensity = _first(r"<Intensity[^>]*>([0-9.]+\s*%)</Intensity>")  # the "% " form
+    if intensity:
+        out["light_intensity"] = intensity
     chans = re.findall(r'<Channel[^>]*\sName="([^"]+)"', raw_metadata)
     if chans:
         # de-duplicate, keep order

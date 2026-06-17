@@ -75,6 +75,11 @@ class OverlayParams:
     excluded_alpha: float = 0.55                        # exclusion blend strength
     sabg_candidate_color: tuple[int, int, int] = (0, 180, 180)  # pre-rejection SABG+ (cyan)
     sabg_candidate_alpha: float = 0.45                  # candidate blend (now a default-on primary layer)
+    # Grouped "masked" display layer: non-tissue + excluded + artifact + fold merged
+    # into ONE neutral shade (drawn as a union, not stacked). Used by the default
+    # section figure (the clean 2-layer view: masked grey + SABG+ green).
+    masked_color: tuple[int, int, int] = (128, 128, 128)  # grouped excluded/masked (grey)
+    masked_alpha: float = 0.50                          # grouped masked blend strength
 
 
 @dataclass
@@ -109,6 +114,25 @@ class OutputParams:
     log_files: bool = True   # log the files written at each step
     run_log: bool = True   # also tee the console output to a timestamped log file
     run_log_name: str = "%Y%m%d-%H%M_run.log"   # strftime template, in the out dir
+
+
+@dataclass
+class ReportParams:
+    """What the tabular run report contains (alongside the always-written
+    ``results.csv`` + ``config.yaml``). ``metadata.csv`` = a human digest of the run
+    (params used, timing, version) + per-CZI acquisition metadata; the optional
+    ``results_detailed.csv`` = per-section layer px/areas + intersections + intensities;
+    ``results.xlsx`` bundles results / metadata / details into one workbook (openpyxl).
+    Content is customisable: empty allowlists mean 'everything available'."""
+    metadata: bool = True            # write metadata.csv + workbook 'metadata' tab
+    details: bool = False            # write results_detailed.csv + 'details' tab
+    workbook: bool = True            # write results.xlsx (results [+metadata] [+details] tabs)
+    workbook_name: str = "results.xlsx"
+    # Which metadata scopes to include: run (timing/version/command), params (synthetic
+    # analysis settings), acquisition (per-CZI scan metadata from the file).
+    metadata_blocks: list[str] = field(default_factory=lambda: ["run", "params", "acquisition"])
+    acquisition_fields: list[str] = field(default_factory=list)  # [] = all found
+    detail_columns: list[str] = field(default_factory=list)      # [] = all
 
 
 @dataclass
@@ -195,6 +219,7 @@ class Config:
     overlay: OverlayParams = field(default_factory=OverlayParams)
     whitebalance: WhiteBalanceParams = field(default_factory=WhiteBalanceParams)
     output: OutputParams = field(default_factory=OutputParams)
+    report: ReportParams = field(default_factory=ReportParams)
     progress: ProgressParams = field(default_factory=ProgressParams)
     gui: GuiParams = field(default_factory=GuiParams)
     paths: PathsParams = field(default_factory=PathsParams)
@@ -309,10 +334,16 @@ def load_config(path: str | Path | None) -> Config:
             cfg.overlay.sabg_candidate_color = tuple(ov["sabg_candidate_color"])
         if ov.get("sabg_candidate_alpha") is not None:
             cfg.overlay.sabg_candidate_alpha = float(ov["sabg_candidate_alpha"])
+        if "masked_color" in ov:
+            cfg.overlay.masked_color = tuple(ov["masked_color"])
+        if ov.get("masked_alpha") is not None:
+            cfg.overlay.masked_alpha = float(ov["masked_alpha"])
     if "whitebalance" in raw and raw["whitebalance"]:
         _update_dataclass(cfg.whitebalance, raw["whitebalance"])
     if "output" in raw and raw["output"]:
         _update_dataclass(cfg.output, raw["output"])
+    if "report" in raw and raw["report"]:
+        _update_dataclass(cfg.report, raw["report"])
     if "progress" in raw and raw["progress"]:
         _update_dataclass(cfg.progress, raw["progress"])
     if "gui" in raw and raw["gui"]:
