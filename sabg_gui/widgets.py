@@ -991,16 +991,19 @@ def build_layers_panel(parent, cfg, show_vars: dict, on_change: Callable) -> Non
     for i, (key, color_attr, alpha_attr, default) in enumerate(LAYER_PANEL_SPEC):
         sv = tk.BooleanVar(value=layer_defaults.get(key, default))
         show_vars[key] = sv
+        # Slight gap above SABG+ to set the final result apart from the audit layers
+        # (edge-rejected etc.). Applied to every widget in the row so it stays aligned.
+        pad = (8, 1) if key == "sabg" else (1, 1)
         tk.Checkbutton(parent, variable=sv, command=on_change).grid(
-            row=i, column=0, sticky="w")
+            row=i, column=0, sticky="w", pady=pad)
         # width 16 fits the longest label ("candidate SABG+") without clipping the "+".
         tk.Label(parent, text=LAYER_LABELS[key], anchor="w", width=16).grid(
-            row=i, column=1, sticky="w")
+            row=i, column=1, sticky="w", pady=pad)
 
         # Short flat rectangle (was a full-height button) — lower-profile + more compact.
         swatch = tk.Frame(parent, width=22, height=10, relief="raised", bd=1,
                           bg=rgb_to_hex(getattr(ov, color_attr)), cursor="hand2")
-        swatch.grid(row=i, column=2, padx=4, pady=1)
+        swatch.grid(row=i, column=2, padx=4, pady=pad)
         swatch.grid_propagate(False)
 
         def pick(_evt=None, ca=color_attr, sw=swatch):
@@ -1018,8 +1021,8 @@ def build_layers_panel(parent, cfg, show_vars: dict, on_change: Callable) -> Non
             on_change()
 
         ac = _AlphaControl(parent, getattr(ov, alpha_attr), set_alpha)
-        ac.scale.grid(row=i, column=3, sticky="ew", padx=(4, 2))
-        ac.entry.grid(row=i, column=4, padx=(0, 2))
+        ac.scale.grid(row=i, column=3, sticky="ew", padx=(4, 2), pady=pad)
+        ac.entry.grid(row=i, column=4, padx=(0, 2), pady=pad)
     parent.columnconfigure(3, weight=1)
 
 

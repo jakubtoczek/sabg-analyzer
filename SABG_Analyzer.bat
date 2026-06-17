@@ -29,11 +29,12 @@ for %%C in (%CANDS%) do if not defined PY ( %%~C -c "import sys" >nul 2>nul && s
 if not defined PY goto :no_python
 
 rem 2b) Reject a too-new (or too-old) Python BEFORE the doomed install: pylibCZIrw
-rem     wheels exist only for CPython 3.9 - 3.12.
-set "PYNUM="
-for /f %%v in ('%PY% -c "import sys;print(sys.version_info[0]*100+sys.version_info[1])" 2^>nul') do set "PYNUM=%%v"
-if defined PYNUM if %PYNUM% GTR 312 goto :wrong_python
-if defined PYNUM if %PYNUM% LSS 309 goto :wrong_python
+rem     wheels exist only for CPython 3.9 - 3.12. Gate on Python's EXIT CODE, not a
+rem     captured stdout number: on some setups (e.g. the new PyManager 'python') the
+rem     old `for /f` capture came back EMPTY, so the guard fell through and a 3.13/3.14
+rem     went on to a doomed pylibCZIrw install. An exit code can't be lost this way.
+%PY% -c "import sys; v=sys.version_info[0]*100+sys.version_info[1]; sys.exit(0 if 309<=v<=312 else 1)"
+if errorlevel 1 goto :wrong_python
 
 :install_deps
 echo.
