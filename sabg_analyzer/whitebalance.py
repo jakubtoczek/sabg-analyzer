@@ -58,6 +58,39 @@ def resolve_white_point(rgb: np.ndarray, wbp) -> np.ndarray:
     return estimate_white_point(rgb, wbp.bright_frac)
 
 
+def apply_temperature(wp: np.ndarray, delta: float, k: float = 0.02) -> np.ndarray:
+    """Warm/cool nudge of a white point (display only). ZEN ±1 ≈ ±10 K.
+
+    WB gain is ``target / wp``, so to *warm* the image (delta > 0: more red, less
+    blue) we shrink the red channel of the white point and grow the blue one. ``k``
+    is the per-step fraction — a calibration knob; flip its sign if a warm nudge
+    reads cool against ZEN.
+    """
+    if not delta:
+        return np.asarray(wp, np.float32)
+    f = 1.0 + k * float(delta)
+    return np.asarray(wp, np.float32) * np.array([1.0 / f, 1.0, f], np.float32)
+
+
+def tone_curve(rgb: np.ndarray, brightness: float = 0.0, contrast: float = 0.0,
+               gamma: float = 1.0) -> np.ndarray:
+    """Display tone adjust on uint8 RGB (figures only; default is a no-op).
+
+    On normalised [0,1]: gamma (``x**(1/gamma)``), then contrast (affine about
+    mid-grey ``(x-0.5)*(1+contrast)+0.5``), then additive brightness.
+    """
+    if brightness == 0.0 and contrast == 0.0 and gamma == 1.0:
+        return rgb
+    x = rgb.astype(np.float32) / 255.0
+    if gamma != 1.0:
+        x = np.power(x, 1.0 / max(gamma, 1e-3))
+    if contrast:
+        x = (x - 0.5) * (1.0 + contrast) + 0.5
+    if brightness:
+        x = x + brightness
+    return (x.clip(0.0, 1.0) * 255.0).astype(np.uint8)
+
+
 def white_balance(rgb: np.ndarray, background: np.ndarray,
                   target: float = 250.0) -> np.ndarray:
     """Scale each channel so *background* maps to *target* (near-white)."""
@@ -65,3 +98,28 @@ def white_balance(rgb: np.ndarray, background: np.ndarray,
     gain = target / bg
     out = rgb.astype(np.float32) * gain
     return out.clip(0, 255).astype(np.uint8)
+
+
+def balance_for_display(rgb: np.ndarray, wbp, white_point=None) -> np.ndarray:
+    """Full display pipeline (figures only) shared by preview + export so they
+    always match: resolve (or override) the white point, apply the temperature
+    nudge, white-balance to ``wbp.target``, then the tone curve."""
+    wp = (np.asarray(white_point, np.float32) if white_point is not None
+          else resolve_white_point(rgb, wbp))
+    wp = apply_temperature(wp, getattr(wbp, "temperature", 0.0),
+                           getattr(wbp, "temperature_k", 0.02))
+    out = white_balance(rgb, wp, target=wbp.target)
+    return tone_curve(out, getattr(wbp, "brightness", 0.0),
+                      getattr(wbp, "contrast", 0.0), getattr(wbp, "gamma", 1.0))
+
+
+if __name__ == "__main__":  # ponytail: smallest self-check for the new tone/temp math
+    g = np.full((4, 4, 3), 128, np.uint8)
+    assert tone_curve(g) is g, "default tone must be a no-op (identity)"
+    assert tone_curve(g, gamma=2.0).mean() > 128, "gamma>1 brightens mids"
+    assert tone_curve(g, brightness=-0.5).mean() < 128, "negative brightness darkens"
+    wp = np.array([200.0, 200.0, 200.0], np.float32)
+    assert np.allclose(apply_temperature(wp, 0), wp), "delta=0 is identity"
+    warm = apply_temperature(wp, +2)                  # warmer -> smaller red wp -> bigger red gain
+    assert (250.0 / warm)[0] > (250.0 / wp)[0] > (250.0 / warm)[2], "warm raises red gain, cuts blue"
+    print("whitebalance self-check OK")

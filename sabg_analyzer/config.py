@@ -98,6 +98,13 @@ class WhiteBalanceParams:
     #             comparable figures); if unset, falls back to per-image.
     scope: str = "image"
     white_point: list | None = None   # explicit [R,G,B] white point for scope=global / manual pick
+    # Display-only tone adjust (all default to no-op). temperature is a warm/cool nudge of the
+    # white point (ZEN ±1 ≈ ±10 K); temperature_k is its per-step gain (calibration knob).
+    temperature: float = 0.0
+    temperature_k: float = 0.02
+    brightness: float = 0.0      # additive on [0,1] after WB (-1..1)
+    contrast: float = 0.0        # affine about mid-grey (-1..1)
+    gamma: float = 1.0           # out = in**(1/gamma); >0
 
 
 @dataclass

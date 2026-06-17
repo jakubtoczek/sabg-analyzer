@@ -804,7 +804,9 @@ def _param_summary(cfg: Config) -> list[tuple[str, str]]:
                    f"sat_min={cfg.tissue.sat_min}, adaptive={cfg.tissue.adaptive}"),
         ("stages", f"artifact={cfg.artifact.enabled}, fold={cfg.fold.enabled} "
                    f"(exclude_from_tissue={cfg.fold.exclude_from_tissue}), edge={cfg.edge.enabled}"),
-        ("whitebalance", f"scope={cfg.whitebalance.scope}"),
+        ("whitebalance", f"scope={cfg.whitebalance.scope}, temp={cfg.whitebalance.temperature:g}, "
+                         f"tone(b/c/g)={cfg.whitebalance.brightness:g}/{cfg.whitebalance.contrast:g}/"
+                         f"{cfg.whitebalance.gamma:g}"),
         ("resolution", f"process_zoom={cfg.process_zoom}, overview={cfg.overview_um_per_px}um/px, "
                        f"maps={cfg.maps_um_per_px}um/px"),
     ]
@@ -981,7 +983,12 @@ def _build_config_snapshot(cfg: Config, rows: list[dict]) -> dict:
                                          if cfg.whitebalance.white_point is not None else None),
                          "bright_frac": cfg.whitebalance.bright_frac,
                          "target": cfg.whitebalance.target,
-                         "homogeneity_tol": cfg.whitebalance.homogeneity_tol},
+                         "homogeneity_tol": cfg.whitebalance.homogeneity_tol,
+                         "temperature": cfg.whitebalance.temperature,
+                         "temperature_k": cfg.whitebalance.temperature_k,
+                         "brightness": cfg.whitebalance.brightness,
+                         "contrast": cfg.whitebalance.contrast,
+                         "gamma": cfg.whitebalance.gamma},
         "output": {"debug": cfg.output.debug,
                    "maps": cfg.output.maps,
                    "keep_maps": cfg.output.keep_maps,

@@ -288,7 +288,7 @@ def export_roi(rgb: np.ndarray, pixel_size_um: float | None, dest_base: str | Pa
                scalebar_pos: str = "br", scalebar_label: bool = True,
                wb: bool = True, target_um: float = 200.0,
                wb_bright_frac: float = 0.2, wb_target: float = 250.0,
-               wb_white_point=None) -> list[Path]:
+               wb_white_point=None, wbp=None) -> list[Path]:
     """Write publication presets for one ROI / section image. Returns the paths.
 
     Reuses the batch export building blocks (`whitebalance`, `overlay`,
@@ -322,9 +322,14 @@ def export_roi(rgb: np.ndarray, pixel_size_um: float | None, dest_base: str | Pa
             written.append(p)
 
     _write(rgb, "raw")
-    wp = (np.asarray(wb_white_point, np.float32) if wb_white_point is not None
-          else whitebalance.estimate_white_point(rgb, wb_bright_frac))
-    wb_img = whitebalance.white_balance(rgb, wp, target=wb_target) if wb else rgb
+    if not wb:
+        wb_img = rgb
+    elif wbp is not None:                  # match the GUI's full display pipeline (temp + tone)
+        wb_img = whitebalance.balance_for_display(rgb, wbp, white_point=wb_white_point)
+    else:                                  # standalone fallback: plain white-balance only
+        wp = (np.asarray(wb_white_point, np.float32) if wb_white_point is not None
+              else whitebalance.estimate_white_point(rgb, wb_bright_frac))
+        wb_img = whitebalance.white_balance(rgb, wp, target=wb_target)
     _write(_bar(wb_img.copy()), "wb_scalebar")
     if order:
         comp = overlay.composite_overlay(wb_img, order)
