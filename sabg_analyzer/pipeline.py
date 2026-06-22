@@ -181,11 +181,8 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
     ov_rgb, scale = czi_io.read_overview(
         doc, scene, max_edge=cfg.overview_max_edge, zoom_cap=z,
         um_per_px=cfg.overview_um_per_px)
-    from .tissue import (artifact_mask, clean_tissue_mask, erode_mask,
-                         estimate_background, segment_tissue, tissue_mask)
+    from .tissue import artifact_mask, erode_mask, segment_tissue
     tcfg = cfg.scene_tissue(scene.key)   # tissue params (+ any per-scene overrides)
-    # Per-scene glass colour (for pale/tinted backgrounds the fixed white test misses).
-    bg = estimate_background(ov_rgb, tcfg)
     ov_tissue = segment_tissue(ov_rgb, tcfg)
     H, W = ov_tissue.shape
     # border erosion (edge halos) on the *counting* region only.
@@ -1014,7 +1011,6 @@ def _build_config_snapshot(cfg: Config, rows: list[dict]) -> dict:
                      "checkpoints": list(cfg.progress.checkpoints)},
         "gui": {"info_opens": list(cfg.gui.info_opens),
                 "preview_roi_cap_um": cfg.gui.preview_roi_cap_um,
-                "preview_hi_res": cfg.gui.preview_hi_res,
                 "preview_roi_margin_um": cfg.gui.preview_roi_margin_um,
                 "layer_defaults": dict(cfg.gui.layer_defaults),
                 "label_rotate_quarter_turns": cfg.gui.label_rotate_quarter_turns},

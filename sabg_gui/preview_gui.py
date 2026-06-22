@@ -120,7 +120,7 @@ class PreviewWindow(tk.Toplevel):
         self.manual_auto = tk.BooleanVar(value=True)       # auto threshold on ROI
         self.manual_thr = tk.StringVar(value="")
         self.auto_recompute = tk.BooleanVar(value=True)    # debounced auto-recompute
-        self.view_res = tk.StringVar()                     # px/µm label (supersedes gui.preview_hi_res)
+        self.view_res = tk.StringVar()                     # px/µm label (Preview resolution picker)
         self._res_to_mult: dict[str, int] = {}             # label -> thumb multiplier
         self._loaded_um: float | None = None               # achieved µm/px of the shown image
         self._pending_view_frac: tuple | None = None       # carry the zoomed view across a res change
@@ -1728,9 +1728,6 @@ class PreviewWindow(tk.Toplevel):
         t = lay["tissue"]
         tissue_px = int(t.sum())
         sabg_px = int(lay["sabg"].sum())
-        fold_px = int(lay["fold"].sum())
-        art_px = int(lay["artifact"].sum())
-        edge_px = int(lay["edge_removed"].sum())
         pct = 100.0 * sabg_px / tissue_px if tissue_px else 0.0
         thr_s = lay.get("thr_s")
         thr_line = f"thr {lay['thr']:.4f}" + (f"   2nd {thr_s:.4f}" if thr_s else "")

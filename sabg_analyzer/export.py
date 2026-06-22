@@ -543,7 +543,7 @@ def export(data_dir, out_dir, p: ExportParams, cfg,
     if not cfg.output.keep_maps:
         import shutil
         shutil.rmtree(maps_dir, ignore_errors=True)
-        print(f"[export] removed maps/ (output.keep_maps=false)")
+        print("[export] removed maps/ (output.keep_maps=false)")
 
     if do_fov:
         print(f"[export] {len(rows)} FOVs -> {exp_dir}")

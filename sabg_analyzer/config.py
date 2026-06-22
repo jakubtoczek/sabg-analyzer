@@ -164,10 +164,8 @@ class ProgressParams:
 class GuiParams:
     """GUI-only knobs (read by sabg_gui.py / the preview window)."""
     info_opens: list[str] = field(default_factory=lambda: ["sections", "labels"])
-    # Preview/Tune window: ROI draw cap (default 2x export.fov_um = 1000 µm) and
-    # whether the picker opens the selected thumb at higher resolution by default.
+    # Preview/Tune window: ROI draw cap (default 2x export.fov_um = 1000 µm).
     preview_roi_cap_um: float = 1000.0
-    preview_hi_res: bool = False
     # Analyse the ROI with an outer margin (µm) read from the section but cropped away
     # before display/quantification, so edge-sensitive detectors (fold ridges, tissue/edge
     # morphology) get neighbourhood context and don't fail at the ROI border. The fold

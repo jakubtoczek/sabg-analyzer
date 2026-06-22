@@ -290,7 +290,6 @@ gui:
   # What the Info button opens. Any of: sections, labels, thumbs.
   info_opens: [sections, labels]
   preview_roi_cap_um: 1000.0  # Preview/Tune: max ROI side when drawing (default 2x fov_um)
-  preview_hi_res: false       # open the selected thumb at higher resolution by default
   # Analyse the ROI with this much outer margin (µm), read from the section but cropped away
   # before display/quant, so edge-sensitive detectors (fold ridges, tissue/edge morphology)
   # get context and don't fail at the ROI border. ~fold.min_length_um covers the longest

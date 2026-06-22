@@ -36,7 +36,7 @@ from .masks import _primary_secondary, compute_region_masks, detect_sabg
 from .metadata import build_aliases, load_metadata, section_skipped
 from .pipeline import _build_config_snapshot, _score_ranges
 from .threshold import ScoreHistogram, compute_threshold
-from .tissue import erode_mask, estimate_background, segment_tissue
+from .tissue import erode_mask, segment_tissue
 
 
 # ---------------------------------------------------------------------------
