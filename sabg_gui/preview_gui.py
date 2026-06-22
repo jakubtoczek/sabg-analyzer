@@ -41,7 +41,6 @@ from . import widgets as gw
 from .widgets import CanvasNav              # shared mouse-only canvas navigation
 from sabg_analyzer import export, overlay, preview, whitebalance
 from sabg_analyzer.config import load_config
-from sabg_analyzer.tissue import segment_tissue
 
 _VIEW_MULTS = [1, 2, 4, 8]          # thumb-resolution multipliers for the px/µm picker
 # Scale-bar corner labels (clear) -> the export.draw_scalebar position codes.
@@ -377,33 +376,52 @@ class PreviewWindow(tk.Toplevel):
         # the draggable pick + clear, and the temperature nudge (a colour-balance control).
         wbs = self._collapsible_strip(bar, strip_parent, "⚪ white balance",
                                       after_widget=after_widget)
-        tk.Checkbutton(wbs, text="on", variable=self.wb_on,
-                       command=self._on_wb_toggle).pack(side="left", padx=(8, 2))
-        tk.Checkbutton(wbs, text="auto", variable=self.wb_auto,
-                       command=self._on_wb_auto).pack(side="left", padx=(2, 2))
+        cb_on = tk.Checkbutton(wbs, text="on", variable=self.wb_on,
+                               command=self._on_wb_toggle)
+        cb_on.pack(side="left", padx=(8, 2))
+        gw.Tooltip(cb_on, "Apply white balance to the displayed image. Figures only — "
+                          "quantification always uses raw pixels.")
+        cb_auto = tk.Checkbutton(wbs, text="auto", variable=self.wb_auto,
+                                 command=self._on_wb_auto)
+        cb_auto.pack(side="left", padx=(2, 2))
+        gw.Tooltip(cb_auto, "Auto-estimate the white point from the image. Untick to pick a "
+                            "white area by hand.")
         # scope: image (each self-balances) | section (one per section) | global (whole dataset).
         # Shared var so both tabs' menus track together.
         if not hasattr(self, "wb_scope"):
             self.wb_scope = tk.StringVar(
                 value=getattr(self.cfg.whitebalance, "scope", "image"))
-        ttk.OptionMenu(wbs, self.wb_scope, self.wb_scope.get(),
-                       "image", "section", "global",
-                       command=self._on_wb_scope).pack(side="left", padx=(0, 2))
+        om_scope = ttk.OptionMenu(wbs, self.wb_scope, self.wb_scope.get(),
+                                  "image", "section", "global",
+                                  command=self._on_wb_scope)
+        om_scope.pack(side="left", padx=(0, 2))
+        gw.Tooltip(om_scope, "Which images share one white point: image = each self-balances; "
+                             "section = one per section; global = one for the whole dataset.")
         # auto de-cast strength: 0 = mild (brightest px), 1 = map the glass fully to white
-        self._tone_row(wbs, "neut", self.wb_neutralize, 0.0, 1.0)
+        self._tone_row(wbs, "neut", self.wb_neutralize, 0.0, 1.0,
+                       tip="Auto de-cast strength. 0 = mild (brightest pixels); 1 = map the glass "
+                           "colour fully to white. Beige glass usually needs ~0.9–1.0 to go neutral.")
         # sticky "pick white area" toggle (like Draw ROI); enabled only when WB on + Auto off
         btn_pick = tk.Button(wbs, text="pick white area", command=self.on_pick_white)
         btn_pick.pack(side="left", padx=(4, 0))
+        gw.Tooltip(btn_pick, "Drag a rectangle over blank glass to set the white point by hand "
+                             "(needs WB on + Auto off).")
         self._pick_btns.append(btn_pick)
         self.btn_pick_white = btn_pick
-        tk.Button(wbs, text="clear", command=self._wb_clear_pick).pack(side="left", padx=(0, 2))
-        self._tone_row(wbs, "temp", self.tone_temp, -10.0, 10.0)
+        btn_clear = tk.Button(wbs, text="clear", command=self._wb_clear_pick)
+        btn_clear.pack(side="left", padx=(0, 2))
+        gw.Tooltip(btn_clear, "Clear the picked white area and revert to auto.")
+        self._tone_row(wbs, "temp", self.tone_temp, -10.0, 10.0,
+                       tip="Warm/cool nudge of the white point (display only). ZEN ±1 ≈ ±10 K.")
         # tone curve in a collapsed strip (rarely changed; default no-op)
         tn = self._collapsible_strip(bar, strip_parent, "🎨 tone",
                                      after_widget=after_widget)
-        self._tone_row(tn, "bright", self.tone_brightness, -1.0, 1.0)
-        self._tone_row(tn, "contr", self.tone_contrast, -1.0, 1.0)
-        self._tone_row(tn, "gamma", self.tone_gamma, 0.2, 3.0)
+        self._tone_row(tn, "bright", self.tone_brightness, -1.0, 1.0,
+                       tip="Display brightness (figures only); reset returns to a no-op.")
+        self._tone_row(tn, "contr", self.tone_contrast, -1.0, 1.0,
+                       tip="Display contrast about mid-grey (figures only); reset returns to a no-op.")
+        self._tone_row(tn, "gamma", self.tone_gamma, 0.2, 3.0,
+                       tip="Display gamma (figures only); 1.0 is a no-op, >1 brightens mid-tones.")
         tk.Button(tn, text="reset", command=self._reset_tone).pack(side="left", padx=(8, 2))
         # scale-bar controls live in a collapsed strip (rarely changed)
         sb = self._collapsible_strip(bar, strip_parent, "⚖ scale bar",
@@ -534,14 +552,12 @@ class PreviewWindow(tk.Toplevel):
         auto = getattr(wbp, "auto", True)
         neut = getattr(wbp, "neutralize", 0.0)
         def est(r):                                          # auto white point for image r
-            tis = None
-            if neut > 0.0:                                   # sample glass from non-tissue
-                try:
-                    tis = segment_tissue(r, self.cfg.tissue)
-                except Exception:
-                    tis = None
+            # Whole-frame glass estimate (matches resolve_white_point / export). The 0.6.5
+            # "sample glass from non-tissue pixels" path backfired: segment_tissue classifies
+            # the beige glass as tissue on these slides, so the non-tissue sample was only the
+            # white mosaic fill and neutralize had nothing to correct. ponytail: no tissue gate.
             return whitebalance.auto_white_point(
-                r, wbp.bright_frac, neut, getattr(wbp, "glass_percentile", 60.0), tissue=tis)
+                r, wbp.bright_frac, neut, getattr(wbp, "glass_percentile", 60.0))
         if scope == "global":
             if self._global_wp is None:
                 if not auto and wbp.white_point:
@@ -732,14 +748,42 @@ class PreviewWindow(tk.Toplevel):
         self.status.configure(text=f"{scope} white point cleared")
 
     # -- WB tone / temperature (display-only) ------------------------------
-    def _tone_row(self, parent, text, var, lo, hi) -> None:
-        """Label + Scale + live numeric readout for one tone var (shared across tabs)."""
-        tk.Label(parent, text=text).pack(side="left", padx=(8, 0))
-        ttk.Scale(parent, from_=lo, to=hi, variable=var, length=70).pack(side="left")
-        val = tk.Label(parent, width=4)
-        var.trace_add("write", lambda *_a, v=var, w=val: w.configure(text=f"{v.get():.2f}"))
-        val.configure(text=f"{var.get():.2f}")
-        val.pack(side="left")
+    def _tone_row(self, parent, text, var, lo, hi, tip="") -> None:
+        """Label + Scale + editable numeric entry for one tone var (shared across tabs).
+
+        The slider's write-trace refreshes the entry text; Return/FocusOut parses + clamps
+        to [lo, hi] and writes back via the var (firing its existing apply-trace).
+        # ponytail: inline editable entry (mirror _AlphaControl); unify only if a 3rd caller appears.
+        """
+        lbl = tk.Label(parent, text=text)
+        lbl.pack(side="left", padx=(8, 0))
+        scale = ttk.Scale(parent, from_=lo, to=hi, variable=var, length=70)
+        scale.pack(side="left")
+        ent = tk.Entry(parent, width=6)
+        ent.pack(side="left")
+
+        def _show(*_a, v=var, e=ent):
+            e.delete(0, "end")
+            e.insert(0, f"{v.get():.2f}")
+
+        def _commit(_evt=None, v=var, e=ent, lo=lo, hi=hi):
+            try:
+                x = max(lo, min(hi, float(e.get())))
+            except ValueError:
+                _show()                        # bad input -> revert to the current value
+                return
+            if x != v.get():
+                v.set(x)                       # fires the var's apply-trace; the trace's _show resyncs
+            else:
+                _show()                        # normalise the displayed text (e.g. "0.6" -> "0.60")
+
+        var.trace_add("write", _show)
+        ent.bind("<Return>", _commit)
+        ent.bind("<FocusOut>", _commit)
+        _show()
+        if tip:
+            gw.Tooltip(lbl, tip)
+            gw.Tooltip(scale, tip)
 
     def _on_tone_change(self) -> None:
         """Push the tone/temperature vars into cfg and re-apply WB (display-only)."""
