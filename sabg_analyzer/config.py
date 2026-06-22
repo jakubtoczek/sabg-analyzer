@@ -96,7 +96,7 @@ class WhiteBalanceParams:
     auto: bool = True
     # Auto de-cast strength: 0 = mild (brightest-pixel white point, original behaviour);
     # 1 = map the dominant glass colour (glass_percentile per channel) fully to white.
-    neutralize: float = 0.0
+    neutralize: float = 0.9
     glass_percentile: float = 60.0   # per-channel percentile that defines the "glass" colour
     # Consistency scope of the white point (where the point comes from + how widely it is shared):
     #   image   - from the image being viewed (overview or ROI crop); each self-balances.

@@ -445,32 +445,26 @@ def _save(img, base: Path, formats) -> list[Path]:
 
 
 def _qc_masks(crop_rgb, conv, cfg, thr, thr_s, um_per_px=None):
-    """Recompute SABG+/artifact masks for a full-res FOV crop, matching the
-    analysis logic (per-pixel; the crop is ~all tissue, so no section blob)."""
-    from .edge import refine_positive
-    from .tissue import artifact_mask, tissue_mask
-    opp = scoring.opponent_score(crop_rgb)
-    deconv = scoring.deconvolution_score(crop_rgb, conv)
-    raw_t = tissue_mask(crop_rgb, cfg.tissue)
-    art = (artifact_mask(crop_rgb, opp, cfg.artifact) & raw_t
-           if cfg.artifact.enabled else np.zeros(raw_t.shape, bool))
-    if cfg.detection.primary == "opponent":
-        p_s, s_s = opp, deconv
-    else:
-        p_s, s_s = deconv, opp
-    pos = (raw_t & ~art) & (p_s >= thr)
-    if cfg.detection.require_agreement and thr_s is not None:
-        pos &= (s_s >= thr_s)
-    if cfg.edge.enabled:
-        pos, _ = refine_positive(pos, crop_rgb, um_per_px, cfg.edge)
-    ep = max(0, int(cfg.detection.expand_px))      # match analyze: teal-gated growth
-    if ep and pos.any():
-        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * ep + 1, 2 * ep + 1))
-        grown = cv2.dilate(pos.astype(np.uint8), k).astype(bool) & raw_t & ~art
-        if cfg.detection.expand_teal_min > 0:
-            grown &= pos | (opp >= cfg.detection.expand_teal_min)
-        pos = grown
-    return pos, art
+    """SABG+/artifact masks for a full-res FOV crop, via the same
+    `compute_region_masks` / `detect_sabg` path the preview + analysis use, so the
+    QC overlay matches the authoritative detection (incl. the hysteresis grow).
+    The crop is ~all tissue, so its whole tissue blob is the region (no section blob)."""
+    from .masks import compute_region_masks, detect_sabg
+    from .preview import _roi_fold_band
+    from .tissue import erode_mask, segment_tissue
+    region = segment_tissue(crop_rgb, cfg.tissue)
+    region_c = (erode_mask(region, cfg.artifact.erode_px)
+                if cfg.artifact.enabled else region)
+    fold_band = None
+    if cfg.fold.enabled:
+        fold_band = _roi_fold_band(crop_rgb, region, um_per_px, cfg)
+        if cfg.fold.exclude_from_tissue:
+            region_c = region_c & ~fold_band
+    t, art, fold, opp = compute_region_masks(
+        crop_rgb, cfg.tissue, cfg, region=region, region_c=region_c, fold_band=fold_band)
+    d = detect_sabg(crop_rgb, t, opp, cfg, conv, thr, thr_s, um_per_px,
+                    fold=fold, keep_here=None)
+    return d["sabg"], art
 
 
 def export(data_dir, out_dir, p: ExportParams, cfg,

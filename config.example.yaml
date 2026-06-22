@@ -230,7 +230,7 @@ whitebalance:
   target: 250.0        # channel value that white point is scaled to (near-white)
   homogeneity_tol: 0.15  # reserved: max RGB spread allowed for a manual white-point pick
   auto: true           # true -> estimate the white point; false -> manual (GUI pipette / white_point)
-  neutralize: 0.0      # auto de-cast strength 0..1: 0 = mild (brightest px), 1 = map glass fully to white
+  neutralize: 0.9      # auto de-cast strength 0..1: 0 = mild (brightest px), 1 = map glass fully to white
   glass_percentile: 60.0  # per-channel percentile that defines the "glass" colour (for neutralize>0)
   scope: image         # image | section | global — where the point comes from + how widely it is shared
   white_point: null    # [R,G,B] for the GLOBAL manual pick (what batch honours); null -> estimate

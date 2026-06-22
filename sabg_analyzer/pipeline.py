@@ -573,7 +573,7 @@ def _empty_row(scene: SceneInfo, cfg: Config, alias: str | None = None) -> dict:
 # included because the maps canvas drives hysteresis connectivity (hd_keep).
 _HASH_BLOCKS = ("process_zoom", "tile_size", "overview_um_per_px", "overview_max_edge",
                 "maps_um_per_px", "maps_max_edge", "tissue", "artifact", "edge",
-                "fold", "detection", "threshold")
+                "fold", "detection", "threshold", "intensity")
 
 
 def _analysis_hash(cfg: Config, key: str) -> str:
@@ -1015,7 +1015,9 @@ def _build_config_snapshot(cfg: Config, rows: list[dict]) -> dict:
         "gui": {"info_opens": list(cfg.gui.info_opens),
                 "preview_roi_cap_um": cfg.gui.preview_roi_cap_um,
                 "preview_hi_res": cfg.gui.preview_hi_res,
-                "preview_roi_margin_um": cfg.gui.preview_roi_margin_um},
+                "preview_roi_margin_um": cfg.gui.preview_roi_margin_um,
+                "layer_defaults": dict(cfg.gui.layer_defaults),
+                "label_rotate_quarter_turns": cfg.gui.label_rotate_quarter_turns},
         "paths": {"data_dir": cfg.paths.data_dir, "out_dir": cfg.paths.out_dir,
                   "export_dir": cfg.paths.export_dir,
                   "preview_export_name": cfg.paths.preview_export_name},
