@@ -173,6 +173,8 @@ class PreviewWindow(tk.Toplevel):
         self._excl_rgba: np.ndarray | None = None          # persistent overlay buffer
         self._brush_cursor = None                          # hover brush-outline patch
         self._painting = False
+        self._last_paint_pt = None                         # last painted point (for Ctrl line)
+        self._brush_line = None                            # dashed Ctrl-line preview
 
         for _v in (self.sb_pos, self.sb_len, self.sb_label, self.sb_live):
             _v.trace_add("write", lambda *_: self._refresh_live_scalebar_all())
@@ -970,9 +972,32 @@ class PreviewWindow(tk.Toplevel):
             self._set_draw_active(False)
         else:
             self._hide_brush_cursor()
+            self._hide_brush_line()
+            self._last_paint_pt = None
+
+    @staticmethod
+    def _ctrl_held(e) -> bool:
+        """True if Ctrl was down for this matplotlib mouse event. Reads the Tk event's
+        modifier bitmask (0x0004 = Control) — reliable without canvas keyboard focus; falls
+        back to the matplotlib `key` string."""
+        g = getattr(e, "guiEvent", None)
+        if g is not None and getattr(g, "state", None) is not None:
+            try:
+                return bool(g.state & 0x0004)
+            except TypeError:
+                pass
+        k = getattr(e, "key", None) or ""
+        return "control" in k or "ctrl" in k
 
     def _on_brush_press(self, e) -> None:
         if self.brush_mode is None or e.inaxes is not self.thumb_ax or e.xdata is None:
+            return
+        if self._ctrl_held(e) and self._last_paint_pt is not None:
+            x0, y0 = self._last_paint_pt          # Ctrl+click: stroke a straight line from the last point
+            self._paint_line(x0, y0, e.xdata, e.ydata)
+            self._last_paint_pt = (e.xdata, e.ydata)
+            self._hide_brush_line()
+            self._update_excl_buttons()
             return
         self._painting = True
         self._paint_at(e.xdata, e.ydata)
@@ -984,8 +1009,13 @@ class PreviewWindow(tk.Toplevel):
             self._update_brush_cursor(e.xdata, e.ydata)
             if self._painting:
                 self._paint_at(e.xdata, e.ydata)
+            elif self._ctrl_held(e):              # preview the straight line from the last point
+                self._update_brush_line(e.xdata, e.ydata)
+            else:
+                self._hide_brush_line()
         else:
             self._hide_brush_cursor()
+            self._hide_brush_line()
 
     def _on_brush_release(self, _e) -> None:
         if self._painting:
@@ -994,6 +1024,7 @@ class PreviewWindow(tk.Toplevel):
 
     def _on_brush_leave(self, _e) -> None:
         self._hide_brush_cursor()
+        self._hide_brush_line()
 
     def _update_brush_cursor(self, x: float, y: float) -> None:
         """Show a dashed outline circle at the pointer, sized to the brush (so the user
@@ -1015,6 +1046,43 @@ class PreviewWindow(tk.Toplevel):
         if self._brush_cursor is not None and self._brush_cursor.get_visible():
             self._brush_cursor.set_visible(False)
             self.thumb_canvas.draw_idle()
+
+    def _update_brush_line(self, x: float, y: float) -> None:
+        """Preview a dashed straight line from the last painted point to the pointer (shown
+        while Ctrl is held). Magenta for draw, black for erase — matches the brush cursor."""
+        if self._last_paint_pt is None:
+            self._hide_brush_line()
+            return
+        x0, y0 = self._last_paint_pt
+        edge = "black" if self.brush_mode == "erase" else "magenta"
+        if self._brush_line is None:
+            (self._brush_line,) = self.thumb_ax.plot(
+                [x0, x], [y0, y], color=edge, linewidth=1.2, linestyle="--", zorder=10)
+        else:
+            self._brush_line.set_data([x0, x], [y0, y])
+            self._brush_line.set_color(edge)
+            self._brush_line.set_visible(True)
+        self.thumb_canvas.draw_idle()
+
+    def _hide_brush_line(self) -> None:
+        if self._brush_line is not None and self._brush_line.get_visible():
+            self._brush_line.set_visible(False)
+            self.thumb_canvas.draw_idle()
+
+    def _paint_line(self, x0: float, y0: float, x1: float, y1: float) -> None:
+        """Stamp the exclusion brush along a straight line (brush-radius thick, round caps)
+        from (x0,y0) to (x1,y1). Used by Ctrl+click to connect successive points."""
+        if self.excl_mask is None:
+            return
+        r = max(1, int(self.brush_size.get()))
+        val = 255 if self.brush_mode == "draw" else 0
+        p0 = (int(round(x0)), int(round(y0)))
+        p1 = (int(round(x1)), int(round(y1)))
+        cv2.line(self.excl_mask, p0, p1, val, thickness=2 * r)
+        cv2.circle(self.excl_mask, p0, r, val, -1)        # round caps
+        cv2.circle(self.excl_mask, p1, r, val, -1)
+        self._excl_dirty = True
+        self._refresh_excl_overlay()         # ponytail: a line can span far -> full refresh (rare op)
 
     def _update_excl_buttons(self) -> None:
         """Enable Clear/Save exclusion only when something is painted (mirrors
@@ -1038,6 +1106,7 @@ class PreviewWindow(tk.Toplevel):
         val = 255 if self.brush_mode == "draw" else 0
         cx, cy = int(round(x)), int(round(y))
         cv2.circle(self.excl_mask, (cx, cy), r, val, -1)
+        self._last_paint_pt = (x, y)         # anchor for a subsequent Ctrl-line stroke
         self._excl_dirty = True              # painted but not yet 'Save excl'-ed
         # Per-stroke: update ONLY the stamp's bounding box in the persistent RGBA buffer
         # (was rebuilding a full H×W×4 float every motion → slow on large thumbs).
@@ -1248,6 +1317,7 @@ class PreviewWindow(tk.Toplevel):
         saved = self._section_state.get(entry.scene.key, {})
         self.roi_rect = saved.get("roi_rect")     # restore the remembered rectangle (if any)
         self.excl_mask = None                 # reload the section's mask (or blank)
+        self._last_paint_pt = None            # don't connect a Ctrl-line across sections
         self._section_wp = None               # recompute the section white point (scope=section)
         self._image_wp = None                 # forget any transient image-scope manual pick
         self._excl_dirty = False              # a freshly loaded section starts clean
