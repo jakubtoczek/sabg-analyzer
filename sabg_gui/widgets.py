@@ -71,6 +71,8 @@ class ScrollFrame(tk.Frame):
         self.interior = tk.Frame(self.canvas)
         self._win = self.canvas.create_window((0, 0), window=self.interior,
                                               anchor="nw")
+        self._sr_job = None                  # pending scrollregion recompute (debounce)
+        self._last_canvas_w = -1
         self.interior.bind("<Configure>", self._on_interior_configure)
         self.canvas.bind("<Configure>", self._on_canvas_configure)
         self.canvas.configure(yscrollcommand=sb.set)
@@ -89,15 +91,27 @@ class ScrollFrame(tk.Frame):
             return True
         return (bbox[3] - bbox[1]) <= self.canvas.winfo_height()
 
-    def _on_interior_configure(self, _evt=None) -> None:
+    def _schedule_scrollregion(self) -> None:
+        # ponytail: coalesce the O(n) bbox("all")+scrollregion recompute to once per ~60ms.
+        # During a sash drag this fires every pixel over 100s of gridded widgets -> lag;
+        # debounce instead. Upgrade path if still slow: render the table as a ttk.Treeview.
+        if self._sr_job is None:
+            self._sr_job = self.after(60, self._apply_scrollregion)
+
+    def _apply_scrollregion(self) -> None:
+        self._sr_job = None
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
         if self._content_fits():            # short content stays anchored at the top
             self.canvas.yview_moveto(0.0)
 
+    def _on_interior_configure(self, _evt=None) -> None:
+        self._schedule_scrollregion()
+
     def _on_canvas_configure(self, evt) -> None:
-        self.canvas.itemconfigure(self._win, width=evt.width)
-        if self._content_fits():
-            self.canvas.yview_moveto(0.0)
+        if evt.width != self._last_canvas_w:   # skip redundant width sets (avoid feedback churn)
+            self._last_canvas_w = evt.width
+            self.canvas.itemconfigure(self._win, width=evt.width)
+        self._schedule_scrollregion()
 
     def _on_wheel(self, event) -> None:
         if self._content_fits():            # don't overscroll into blank space above

@@ -63,14 +63,6 @@ def _set_selectable(entry: tk.Entry, text: str) -> None:
     entry.configure(state="readonly", width=max(1, len(text)))
 
 
-def _flash_bg(w, color: str, restore_ms: int = 1200) -> None:
-    """Briefly flash a widget's effective background (Entry needs readonlybackground)."""
-    opt = "readonlybackground" if "readonlybackground" in w.keys() else "background"
-    old = w.cget(opt)
-    w.configure(**{opt: color})
-    w.after(restore_ms, lambda: w.configure(**{opt: old}))
-
-
 def _open_file(path: Path) -> None:
     try:
         os.startfile(str(path))                      # Windows
@@ -105,7 +97,8 @@ class InfoWindow(tk.Toplevel):
             self.config_path if Path(self.config_path).exists() else None)
         self._photo_refs: list[tk.PhotoImage] = []
         self.cell_vars: dict[tuple[int, str], tk.Variable] = {}
-        self._row_anchor: dict[tuple[str, str], tk.Widget] = {}
+        self._row_anchor: dict[tuple[str, str], tuple[tk.Widget, tk.Widget]] = {}  # (file, scene) cells
+        self._flash_state: dict[tk.Widget, tuple] = {}   # widget -> (base_color, after_id)
         self.entries: list = []
         self.cur_idx = 0
         self._picker = None                           # picker handle (marker + arrow nav)
@@ -159,10 +152,15 @@ class InfoWindow(tk.Toplevel):
                   command=self.on_save).pack(side="left")
         tk.Button(btns, text="Open", command=lambda: _open_file(self.csv_path)).pack(side="left", padx=6)
         tk.Button(btns, text="Reload", command=self._reload).pack(side="left")
+        tk.Button(btns, text="Uncheck all", command=lambda: self._set_all_analyze(False)).pack(side="left", padx=(12, 2))
+        tk.Button(btns, text="Check all", command=lambda: self._set_all_analyze(True)).pack(side="left")
         tk.Button(btns, text="?", width=2, command=self._show_help).pack(side="right")
         tk.Label(right, text="Tick 'analyze' to include a section; fill the identity "
                  "columns the alias is built from.", fg="#666", justify="left",
                  wraplength=580, font=("Segoe UI", 8)).pack(fill="x", padx=8)
+        hdr = tk.Frame(right)                   # pinned column header (never scrolls)
+        hdr.pack(fill="x", padx=(0, 16))        # pad ~ scrollbar width so columns line up
+        self._build_table_header(hdr)
         self.table = gw.ScrollFrame(right)
         self.table.pack(fill="both", expand=True)
         self._build_table(self.table.interior)
@@ -290,19 +288,25 @@ class InfoWindow(tk.Toplevel):
     def _reset_view(self) -> None:
         self.navs[self._cur_tab()].reset()
 
-    def _build_table(self, parent: tk.Frame) -> None:
+    def _build_table_header(self, parent: tk.Frame) -> None:
+        """Pinned column header (its own frame above the scroll area, so it never scrolls).
+        ponytail: columns are weight-aligned to the body grid (approximate, not pixel-perfect);
+        a ttk.Treeview would give exact frozen headings but needs a checkbox rewrite."""
         cols = _RO_COLS + _EDIT_COLS
         for c, name in enumerate(cols):
             tk.Label(parent, text=name, font=("Segoe UI", 8, "bold"),
-                     borderwidth=1, relief="groove", padx=3).grid(
-                         row=0, column=c, sticky="ew")
+                     borderwidth=1, relief="groove", padx=3).grid(row=0, column=c, sticky="ew")
+            parent.columnconfigure(c, weight=1, uniform="tbl")
+
+    def _build_table(self, parent: tk.Frame) -> None:
+        cols = _RO_COLS + _EDIT_COLS           # header is built separately (pinned); data from row 0
         for i, (_, r) in enumerate(self.df.iterrows(), start=1):
             file_v, scene_v = str(r["file"]), str(r["scene"])
-            _selectable(parent, file_v, font=("Consolas", 8)).grid(
-                row=i, column=0, sticky="w", padx=3)
+            file_w = _selectable(parent, file_v, font=("Consolas", 8))
+            file_w.grid(row=i, column=0, sticky="w", padx=3)
             anchor = _selectable(parent, scene_v, font=("Consolas", 8))
             anchor.grid(row=i, column=1, sticky="w", padx=3)
-            self._row_anchor[(file_v, scene_v)] = anchor
+            self._row_anchor[(file_v, scene_v)] = (file_w, anchor)
             for c, col in enumerate(_EDIT_COLS, start=len(_RO_COLS)):
                 if col == "analyze":
                     var = tk.BooleanVar(
@@ -314,17 +318,49 @@ class InfoWindow(tk.Toplevel):
                         row=i, column=c, sticky="ew", padx=1)
                 self.cell_vars[(i, col)] = var
         for c in range(len(cols)):
-            parent.columnconfigure(c, weight=1)
+            parent.columnconfigure(c, weight=1, uniform="tbl")
+
+    def _flash_bg(self, w, color: str = "#fff3b0", restore_ms: int = 1200) -> None:
+        """Flash a cell's background, robust to rapid re-clicks: the base colour is captured
+        once (never the already-flashed value) and any in-flight restore is cancelled, so a
+        cell can't get stuck yellow."""
+        opt = "readonlybackground" if "readonlybackground" in w.keys() else "background"
+        st = self._flash_state.get(w)
+        if st is None:
+            base = w.cget(opt)                  # capture the TRUE base only the first time
+        else:
+            base, prev_id = st
+            try:
+                self.after_cancel(prev_id)
+            except Exception:
+                pass
+        w.configure(**{opt: color})
+        aid = self.after(restore_ms, lambda: self._restore_bg(w, opt, base))
+        self._flash_state[w] = (base, aid)
+
+    def _restore_bg(self, w, opt, base) -> None:
+        try:
+            w.configure(**{opt: base})
+        except Exception:
+            pass
+        self._flash_state.pop(w, None)
 
     def _focus_section(self, entry) -> None:
         key = (entry.scene.file_stem, str(entry.scene.scene_index))
-        w = self._row_anchor.get(key)
-        if w is None:
+        cells = self._row_anchor.get(key)
+        if not cells:
             return
         self.table.canvas.update_idletasks()
         total = max(1, self.table.interior.winfo_height())
-        self.table.canvas.yview_moveto(max(0.0, w.winfo_y() / total))
-        _flash_bg(w, "#fff3b0")
+        self.table.canvas.yview_moveto(max(0.0, cells[1].winfo_y() / total))
+        for w in cells:                         # highlight both the file and scene cells
+            self._flash_bg(w)
+
+    def _set_all_analyze(self, value: bool) -> None:
+        """Tick / untick every section's analyze box at once (bulk include/exclude)."""
+        for (_i, col), var in self.cell_vars.items():
+            if col == "analyze":
+                var.set(value)
 
     def on_save(self) -> None:
         for (i, col), var in self.cell_vars.items():
