@@ -239,7 +239,7 @@ class PreviewWindow(tk.Toplevel):
         self._roi_btn_bg = self.btn_draw_roi.cget("background")   # for the sticky toggle
         gw.Tooltip(self.btn_draw_roi, "Sticky toggle: drag a rectangle on the Thumbnail to mark a "
                    "region (capped at gui.preview_roi_cap_um). Click again to return to pan. "
-                   "Or type an exact centre+size below.")
+                   "Or open 'exact ROI' to type a centre + size.")
         # Drawing no longer auto-opens: adjust the rectangle, then "Open ROI".
         self.btn_open_roi = tk.Button(row1, text="Open ROI", command=self.on_open_roi,
                                       state="disabled")
@@ -251,37 +251,35 @@ class PreviewWindow(tk.Toplevel):
         self.btn_clear_roi.pack(side="left", padx=2)
         gw.Tooltip(self.btn_clear_roi, "Drop the current/pending ROI and go back to the editable "
                    "thumbnail.")
+        # exact ROI behind a collapsed toggle next to the ROI buttons: type an absolute centre +
+        # size (µm) for a reproducible crop (matches fovs.csv center_x_um/center_y_um).
+        roi_strip = self._collapsible_strip(row1, tab, "exact ROI", after_widget=barwrap)
+        tk.Label(roi_strip, text="center  x:").pack(side="left", padx=(2, 1))
+        self.roi_cx_var = tk.StringVar(); self.roi_cy_var = tk.StringVar()
+        self.roi_w_var = tk.StringVar();  self.roi_h_var = tk.StringVar()
+        e_cx = tk.Entry(roi_strip, textvariable=self.roi_cx_var, width=8); e_cx.pack(side="left")
+        tk.Label(roi_strip, text="y:").pack(side="left", padx=(4, 1))
+        e_cy = tk.Entry(roi_strip, textvariable=self.roi_cy_var, width=8); e_cy.pack(side="left")
+        tk.Label(roi_strip, text="µm   |   size  width:").pack(side="left", padx=(6, 1))
+        e_w = tk.Entry(roi_strip, textvariable=self.roi_w_var, width=6); e_w.pack(side="left")
+        tk.Label(roi_strip, text="height:").pack(side="left", padx=(4, 1))
+        e_h = tk.Entry(roi_strip, textvariable=self.roi_h_var, width=6); e_h.pack(side="left")
+        tk.Label(roi_strip, text="µm").pack(side="left", padx=(1, 0))
+        btn_set = tk.Button(roi_strip, text="Set", command=self._set_roi_from_fields)
+        btn_set.pack(side="left", padx=(6, 2))
+        self.roi_px_lbl = tk.Label(roi_strip, text="", fg="#557", font=("Segoe UI", 8))
+        self.roi_px_lbl.pack(side="left", padx=(4, 0))
+        for _w in (e_cx, e_cy, e_w, e_h):
+            _w.bind("<Return>", lambda _e: self._set_roi_from_fields())
+        gw.Tooltip(btn_set, "Set the ROI to an exact centre and size in microns — absolute scene "
+                   "coordinates, matching fovs.csv center_x_um/center_y_um. Re-enter the same "
+                   "numbers to reproduce any crop. Enter in a field also applies.")
         tk.Label(row1, text="resolution").pack(side="left", padx=(10, 0))
         labels = self._res_labels()
         ttk.OptionMenu(row1, self.view_res, labels[0], *labels,
                        command=lambda _v: self._reload_display(preserve_view=True)).pack(side="left")
         self.res_label = tk.Label(row1, text="loaded: —", fg="#557", font=("Segoe UI", 8))
         self.res_label.pack(side="left", padx=(6, 0))
-
-        # precise ROI: type an exact centre + size (µm) for a reproducible crop (e.g. re-export
-        # the same location to compare QC overlays). Coords are absolute scene µm, matching
-        # fovs.csv center_x_um/center_y_um.
-        rowroi = tk.Frame(barwrap)
-        rowroi.pack(fill="x")
-        tk.Label(rowroi, text="exact ROI (µm)  cx").pack(side="left", padx=(2, 1))
-        self.roi_cx_var = tk.StringVar(); self.roi_cy_var = tk.StringVar()
-        self.roi_w_var = tk.StringVar();  self.roi_h_var = tk.StringVar()
-        e_cx = tk.Entry(rowroi, textvariable=self.roi_cx_var, width=7); e_cx.pack(side="left")
-        tk.Label(rowroi, text="cy").pack(side="left", padx=(4, 1))
-        e_cy = tk.Entry(rowroi, textvariable=self.roi_cy_var, width=7); e_cy.pack(side="left")
-        tk.Label(rowroi, text="w").pack(side="left", padx=(4, 1))
-        e_w = tk.Entry(rowroi, textvariable=self.roi_w_var, width=6); e_w.pack(side="left")
-        tk.Label(rowroi, text="h").pack(side="left", padx=(4, 1))
-        e_h = tk.Entry(rowroi, textvariable=self.roi_h_var, width=6); e_h.pack(side="left")
-        btn_set = tk.Button(rowroi, text="Set", command=self._set_roi_from_fields)
-        btn_set.pack(side="left", padx=(4, 2))
-        self.roi_px_lbl = tk.Label(rowroi, text="", fg="#557", font=("Segoe UI", 8))
-        self.roi_px_lbl.pack(side="left", padx=(4, 0))
-        for _w in (e_cx, e_cy, e_w, e_h):
-            _w.bind("<Return>", lambda _e: self._set_roi_from_fields())
-        gw.Tooltip(btn_set, "Set the ROI to an exact centre (cx, cy) and size (w, h) in microns — "
-                   "absolute scene coordinates, matching fovs.csv center_x_um/center_y_um. Re-enter "
-                   "the same numbers to reproduce any crop. Enter in a field also applies.")
 
         # row 2: shared view tools + the exclusion-brush toggle (strips open below barwrap)
         self._add_shared_tools(row2, "thumb", strip_parent=tab, after_widget=barwrap)
