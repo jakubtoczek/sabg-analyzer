@@ -114,8 +114,7 @@ class InfoWindow(tk.Toplevel):
             self.config_path if Path(self.config_path).exists() else None)
         self._photo_refs: list[tk.PhotoImage] = []
         self.cell_vars: dict[tuple[int, str], tk.Variable] = {}
-        self._row_anchor: dict[tuple[str, str], tuple[tk.Widget, tk.Widget]] = {}  # (file, scene) cells
-        self._row_cells: dict[tuple[str, str], list] = {}  # all cell widgets per row (for the band)
+        self._row_cells: dict[tuple[str, str], list] = {}  # all cell widgets per row (band + scroll)
         self._hl_cells: list[tk.Widget] = []             # currently-highlighted row cells
         self._hl_base: dict[tk.Widget, str] = {}         # widget -> its un-highlighted bg
         self.entries: list = []
@@ -327,17 +326,11 @@ class InfoWindow(tk.Toplevel):
     def _build_table(self, parent: tk.Frame) -> None:
         for i, (_, r) in enumerate(self.df.iterrows(), start=1):
             file_v, scene_v = str(r["file"]), str(r["scene"])
-            file_w = scene_w = None
             row_widgets = []
             for c, col in enumerate(self._cols):
-                if col == "#":
-                    w = _selectable(parent, str(i), font=("Consolas", 8))
-                    w.grid(row=i, column=c, sticky="w", padx=3)
-                elif col == "file":
-                    file_w = w = _selectable(parent, file_v, font=("Consolas", 8))
-                    w.grid(row=i, column=c, sticky="w", padx=3)
-                elif col == "scene":
-                    scene_w = w = _selectable(parent, scene_v, font=("Consolas", 8))
+                if col in ("#", "file", "scene"):
+                    val = str(i) if col == "#" else (file_v if col == "file" else scene_v)
+                    w = _selectable(parent, val, font=("Consolas", 8))
                     w.grid(row=i, column=c, sticky="w", padx=3)
                 elif col == "analyze":
                     var = tk.BooleanVar(
@@ -351,8 +344,6 @@ class InfoWindow(tk.Toplevel):
                     w.grid(row=i, column=c, sticky="ew", padx=1)
                     self.cell_vars[(i, col)] = var
                 row_widgets.append(w)
-            if file_w is not None and scene_w is not None:
-                self._row_anchor[(file_v, scene_v)] = (file_w, scene_w)
             self._row_cells[(file_v, scene_v)] = row_widgets
         self._apply_col_weights(parent)
 
@@ -369,7 +360,7 @@ class InfoWindow(tk.Toplevel):
         return "background" if "background" in w.keys() else "bg"
 
     def _highlight_row(self, cells) -> None:
-        """Persistently highlight the selected row's file+scene cells (yellow) and clear the
+        """Persistently highlight the selected row (yellow band across every cell) and clear the
         previously-highlighted row. Persistent (not a brief flash) so the selected section is
         always visible; bases are captured once so colours can't drift."""
         keep = set(cells)
@@ -394,11 +385,10 @@ class InfoWindow(tk.Toplevel):
         if not cells:
             return
         self._highlight_row(cells)              # persistent yellow band across the whole row
-        anchor = self._row_anchor.get(key)
-        if anchor is not None:
-            self.table.canvas.update_idletasks()
-            total = max(1, self.table.interior.winfo_height())
-            self.table.canvas.yview_moveto(max(0.0, anchor[1].winfo_y() / total))
+        scene_cell = cells[self._cols.index("scene")]   # scroll the selected row into view
+        self.table.canvas.update_idletasks()
+        total = max(1, self.table.interior.winfo_height())
+        self.table.canvas.yview_moveto(max(0.0, scene_cell.winfo_y() / total))
 
     def _set_all_analyze(self, value: bool) -> None:
         """Tick / untick every section's analyze box at once (bulk include/exclude)."""

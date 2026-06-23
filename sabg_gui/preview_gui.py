@@ -1035,7 +1035,7 @@ class PreviewWindow(tk.Toplevel):
         same event, so the two don't fight."""
         if self.brush_mode is None or e.inaxes is not self.thumb_ax or not self._ctrl_held(e):
             return
-        new = int(self.brush_size.get()) + (2 if e.button == "up" else -2)
+        new = int(self.brush_size.get()) + (4 if e.button == "up" else -4)
         self.brush_size.set(max(2, min(60, new)))      # clamp to the slider range
         if e.xdata is not None:                        # live-resize the hover outline
             self._update_brush_cursor(e.xdata, e.ydata)
