@@ -15,6 +15,7 @@ Consumes the small overview maps written by `analyze` (maps/<slug>_*), so run
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
+from datetime import datetime
 from pathlib import Path
 
 import cv2
@@ -467,6 +468,43 @@ def _qc_masks(crop_rgb, conv, cfg, thr, thr_s, um_per_px=None):
     return d["sabg"], art
 
 
+def _write_export_meta(exp_dir: Path, p: ExportParams, cfg) -> Path:
+    """Human-readable notes on how this export run was rendered — the settings that
+    fovs.csv doesn't carry: white balance, scale bar (esp. the label on/off state),
+    overlay, FOV sizing. Per-FOV centroids/sizes are in fovs.csv."""
+    wb, ov = cfg.whitebalance, cfg.overlay
+    lines = [
+        "SABG export — render settings",
+        f"written : {datetime.now():%Y-%m-%d %H:%M}",
+        "",
+        "FOV crops:",
+        f"  size (fov_um)     : {p.fov_um} µm",
+        f"  selection mode    : {p.fov_select_mode}  (n_fov={p.n_fov})",
+        "  per-FOV centroids : fovs.csv (center_x_um, center_y_um, fov_um)",
+        "",
+        "Scale bar:",
+        f"  FOV bar     : {p.scalebar_um} µm, label {'ON' if p.scalebar_label else 'OFF (bare bar)'}",
+        f"  section bar : {p.sec_scalebar_um} µm, label "
+        f"{'ON' if p.sec_scalebar_label else 'OFF (bare bar)'}, adaptive={p.sec_scalebar_adaptive}",
+        "",
+        "White balance (display/figure only — NOT detection/scoring):",
+        f"  wb base render : {p.wb}",
+        f"  neutralize     : {wb.neutralize}",
+        f"  target         : {wb.target}",
+        f"  scope          : {wb.scope}  (auto={wb.auto})",
+        f"  white_point    : {wb.white_point}",
+        f"  temperature    : {wb.temperature}",
+        f"  tone b/c/g     : {wb.brightness} / {wb.contrast} / {wb.gamma}",
+        "",
+        "QC overlay:",
+        f"  SABG  colour/alpha : {tuple(ov.sabg_color)} @ {ov.sabg_alpha}",
+        f"  artifact col/alpha : {tuple(ov.artifact_color)} @ {ov.artifact_alpha}",
+    ]
+    dest = exp_dir / "export_meta.txt"
+    dest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return dest
+
+
 def export(data_dir, out_dir, p: ExportParams, cfg,
            only_scene: str | None = None, do_fov: bool = True,
            resume: bool = False, metadata: dict | None = None) -> Path:
@@ -537,6 +575,7 @@ def export(data_dir, out_dir, p: ExportParams, cfg,
     if rows:
         exp_dir.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(rows).to_csv(fovs_csv, index=False)
+        _write_export_meta(exp_dir, p, cfg)
 
     # Maps are a transient intermediate (FOV selection + section-figure base);
     # remove them once the figures are made unless the user wants to keep them.

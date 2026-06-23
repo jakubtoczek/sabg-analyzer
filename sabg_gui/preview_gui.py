@@ -1945,10 +1945,20 @@ class PreviewWindow(tk.Toplevel):
             default = tmpl.format(alias=self.entry.alias, kind=kind)
         except Exception:
             default = f"{self.entry.alias}_{kind}"
+        # default into a manual-export subfolder of the output dir (created on demand),
+        # falling back to cfg.paths.export_dir / the OS default.
+        init_dir = self.cfg.paths.export_dir or None
+        if getattr(self, "out_dir", None):
+            sub = Path(self.out_dir) / "exports_manual"
+            try:
+                sub.mkdir(parents=True, exist_ok=True)
+                init_dir = str(sub)
+            except OSError:
+                pass
         path = filedialog.asksaveasfilename(
             parent=self, title="Export base name (presets are appended)",
             defaultextension=".jpg", initialfile=default,
-            initialdir=(self.cfg.paths.export_dir or None),
+            initialdir=init_dir,
             filetypes=[("JPEG", "*.jpg"), ("PNG", "*.png")])
         if not path:
             return
@@ -1966,12 +1976,54 @@ class PreviewWindow(tk.Toplevel):
                 wb_target=self.cfg.whitebalance.target,
                 wb_white_point=self._white_point(rgb),   # match the on-screen WB (scope-aware)
                 wbp=self.cfg.whitebalance)               # + temperature/tone like the preview
+            try:                                          # notes sidecar (reproducibility)
+                self._write_manual_export_meta(base, kind, rgb, px_um)
+            except Exception:
+                pass
             self.status.configure(
                 text=f"exported {len(written)} preset(s) → {base.parent}")
             messagebox.showinfo("Exported", "Wrote:\n" + "\n".join(p.name for p in written),
                                 parent=self)
         except Exception as exc:
             messagebox.showerror("Export failed", str(exc), parent=self)
+
+    def _write_manual_export_meta(self, base, kind, rgb, px_um) -> None:
+        """Write a <base>_meta.txt next to a manual export: crop centre/size (absolute
+        scene µm for a ROI), px scale, and the white-balance + scale-bar settings used —
+        so the figure is reproducible (re-enter centre/size in the exact-ROI fields)."""
+        from datetime import datetime
+        wb = self.cfg.whitebalance
+        h, w = rgb.shape[:2]
+        lines = [
+            f"SABG manual export — {base.name}",
+            f"written : {datetime.now():%Y-%m-%d %H:%M}",
+            f"section : {self.entry.alias if self.entry else '?'}",
+            f"source  : {kind}",
+        ]
+        if kind == "roi" and self.roi_rect is not None and px_um:
+            x, y, ww, hh = self.roi_rect
+            lines += [
+                f"centre  : cx={(x + ww / 2) * px_um:.0f} µm, cy={(y + hh / 2) * px_um:.0f} µm"
+                " (absolute scene coords — paste into exact-ROI fields to reproduce)",
+                f"size    : {ww * px_um:.0f} x {hh * px_um:.0f} µm  ({ww} x {hh} px @ {px_um:.4g} µm/px)",
+            ]
+        else:
+            lines += [f"size    : {w} x {h} px"
+                      + (f" @ {px_um:.4g} µm/px" if px_um else " (no µm scale)")]
+        lines += [
+            "",
+            f"scale bar : {self._sb_len_um()} µm, "
+            f"label {'ON' if self.sb_label.get() else 'OFF (bare bar)'}, pos {self.sb_pos.get()}",
+            "",
+            "white balance (display only):",
+            f"  neutralize : {wb.neutralize}",
+            f"  target     : {wb.target}",
+            f"  scope      : {wb.scope} (auto={wb.auto})",
+            f"  white_point: {self._white_point(rgb)}",
+            f"  temperature: {wb.temperature}",
+            f"  tone b/c/g : {wb.brightness} / {wb.contrast} / {wb.gamma}",
+        ]
+        (base.parent / f"{base.name}_meta.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def _persist_manual_seed(self) -> None:
         """Carry a dialed-in manual seed (Auto off + valid number) for the current
