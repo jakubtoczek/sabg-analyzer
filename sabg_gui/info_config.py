@@ -76,6 +76,23 @@ def _open_file(path: Path) -> None:
 # ---------------------------------------------------------------------------
 _RO_COLS = ["file", "scene"]
 _EDIT_COLS = ["analyze", "animal", "group", "tissue", "treatment", "day", "tag"]
+# Customizable Info-table columns (gui.info_columns). `#` = 1-based scan index (derived,
+# not saved); file/scene/analyze are always shown. Grid weights make `file` wide and the
+# rest narrow (others default to 2); the same weights drive header + body so they align.
+_ALL_COLS = ["#", "file", "scene", "analyze", "animal", "group", "tissue", "treatment", "day", "tag"]
+_LOCKED_COLS = ("file", "scene", "analyze")
+_COL_WEIGHT = {"#": 1, "file": 6, "scene": 1, "analyze": 1}
+
+
+def _resolve_info_columns(requested) -> list[str]:
+    """Validate a configured column order: keep known columns (in order, de-duped, drop
+    unknowns) and force the always-shown columns in if a hand-edited config dropped them."""
+    seen: set[str] = set()
+    cols = [c for c in (requested or []) if c in _ALL_COLS and not (c in seen or seen.add(c))]
+    for c in _LOCKED_COLS:
+        if c not in seen:
+            cols.append(c)
+    return cols or list(_ALL_COLS)
 
 
 class InfoWindow(tk.Toplevel):
@@ -115,6 +132,7 @@ class InfoWindow(tk.Toplevel):
         for col in _RO_COLS + _EDIT_COLS:            # tolerate older/short headers
             if col not in self.df.columns:
                 self.df[col] = ""
+        self._cols = _resolve_info_columns(getattr(self.cfg.gui, "info_columns", None))
         self._build_layout()
 
     def _build_layout(self) -> None:
@@ -288,37 +306,47 @@ class InfoWindow(tk.Toplevel):
     def _reset_view(self) -> None:
         self.navs[self._cur_tab()].reset()
 
+    def _apply_col_weights(self, frame: tk.Frame) -> None:
+        # Same per-column weights on header + body so they stay aligned; `file` (6) is wide,
+        # `scene`/`#`/`analyze` (1) narrow, identity columns (2) medium. uniform keeps the two
+        # grids proportional. ponytail: weight-aligned, not pixel-perfect.
+        for c, name in enumerate(self._cols):
+            frame.columnconfigure(c, weight=_COL_WEIGHT.get(name, 2), uniform="tbl")
+
     def _build_table_header(self, parent: tk.Frame) -> None:
-        """Pinned column header (its own frame above the scroll area, so it never scrolls).
-        ponytail: columns are weight-aligned to the body grid (approximate, not pixel-perfect);
-        a ttk.Treeview would give exact frozen headings but needs a checkbox rewrite."""
-        cols = _RO_COLS + _EDIT_COLS
-        for c, name in enumerate(cols):
+        """Pinned column header (its own frame above the scroll area, so it never scrolls)."""
+        for c, name in enumerate(self._cols):
             tk.Label(parent, text=name, font=("Segoe UI", 8, "bold"),
                      borderwidth=1, relief="groove", padx=3).grid(row=0, column=c, sticky="ew")
-            parent.columnconfigure(c, weight=1, uniform="tbl")
+        self._apply_col_weights(parent)
 
     def _build_table(self, parent: tk.Frame) -> None:
-        cols = _RO_COLS + _EDIT_COLS           # header is built separately (pinned); data from row 0
         for i, (_, r) in enumerate(self.df.iterrows(), start=1):
             file_v, scene_v = str(r["file"]), str(r["scene"])
-            file_w = _selectable(parent, file_v, font=("Consolas", 8))
-            file_w.grid(row=i, column=0, sticky="w", padx=3)
-            anchor = _selectable(parent, scene_v, font=("Consolas", 8))
-            anchor.grid(row=i, column=1, sticky="w", padx=3)
-            self._row_anchor[(file_v, scene_v)] = (file_w, anchor)
-            for c, col in enumerate(_EDIT_COLS, start=len(_RO_COLS)):
-                if col == "analyze":
+            file_w = scene_w = None
+            for c, col in enumerate(self._cols):
+                if col == "#":
+                    _selectable(parent, str(i), font=("Consolas", 8)).grid(
+                        row=i, column=c, sticky="w", padx=3)
+                elif col == "file":
+                    file_w = _selectable(parent, file_v, font=("Consolas", 8))
+                    file_w.grid(row=i, column=c, sticky="w", padx=3)
+                elif col == "scene":
+                    scene_w = _selectable(parent, scene_v, font=("Consolas", 8))
+                    scene_w.grid(row=i, column=c, sticky="w", padx=3)
+                elif col == "analyze":
                     var = tk.BooleanVar(
                         value=not metadata.section_skipped({"analyze": r.get("analyze", "yes")}))
                     tk.Checkbutton(parent, variable=var).grid(row=i, column=c)
+                    self.cell_vars[(i, col)] = var
                 else:
                     var = tk.StringVar(value=str(r.get(col, "")))
                     tk.Entry(parent, textvariable=var, width=10).grid(
                         row=i, column=c, sticky="ew", padx=1)
-                self.cell_vars[(i, col)] = var
-        for c in range(len(cols)):
-            parent.columnconfigure(c, weight=1, uniform="tbl")
+                    self.cell_vars[(i, col)] = var
+            if file_w is not None and scene_w is not None:
+                self._row_anchor[(file_v, scene_v)] = (file_w, scene_w)
+        self._apply_col_weights(parent)
 
     def _flash_bg(self, w, color: str = "#fff3b0", restore_ms: int = 1200) -> None:
         """Flash a cell's background, robust to rapid re-clicks: the base colour is captured
@@ -448,6 +476,10 @@ class ConfigWindow(tk.Toplevel):
         nb.add(t2, text="Other settings")
         gw.build_groups(t2.interior, self.cfg, gw.OTHER_GROUPS, self.field_vars,
                         self._on_field, recompute=False)
+        colf = tk.LabelFrame(t2.interior, text="Info table columns", padx=4, pady=2)
+        colf.pack(fill="x", pady=2)
+        self._info_cols = _resolve_info_columns(getattr(self.cfg.gui, "info_columns", None))
+        self._build_info_col_editor(colf)
 
         # Export tab: bridge the free-form Config.export dict via a DictObj proxy.
         from sabg_analyzer.pipeline import _export_snapshot
@@ -470,6 +502,61 @@ class ConfigWindow(tk.Toplevel):
     def _on_export_field(self, section, attr, kind, _recompute) -> None:
         gw.apply_field(self._export_obj, section, attr, kind,
                        self.export_vars[(section, attr)])
+
+    # -- Info-table column editor (gui.info_columns) -----------------------
+    def _build_info_col_editor(self, parent: tk.Frame) -> None:
+        """Add / remove / reorder the Info table's columns. file/scene/analyze are locked
+        (always shown). Reopen the Info window to see changes after Save."""
+        row = tk.Frame(parent); row.pack(fill="x")
+        self._col_list = tk.Listbox(row, height=7, exportselection=False)
+        self._col_list.pack(side="left", fill="x", expand=True)
+        side = tk.Frame(row); side.pack(side="left", padx=4)
+        tk.Button(side, text="▲", width=3, command=lambda: self._move_info_col(-1)).pack()
+        tk.Button(side, text="▼", width=3, command=lambda: self._move_info_col(1)).pack()
+        tk.Button(side, text="Remove", command=self._remove_info_col).pack(pady=(4, 0))
+        addrow = tk.Frame(parent); addrow.pack(fill="x", pady=(2, 0))
+        tk.Label(addrow, text="add:").pack(side="left")
+        self._col_add = tk.StringVar(value="")
+        self._col_add_menu = ttk.OptionMenu(addrow, self._col_add, "")
+        self._col_add_menu.pack(side="left")
+        tk.Label(parent, text="file, scene, analyze always shown · '#' = scan index · "
+                 "reopen Info to apply", fg="#666", font=("Segoe UI", 8)).pack(anchor="w")
+        self._refresh_info_col_editor()
+
+    def _refresh_info_col_editor(self) -> None:
+        self._col_list.delete(0, "end")
+        for c in self._info_cols:
+            self._col_list.insert("end", c + ("  (locked)" if c in _LOCKED_COLS else ""))
+        menu = self._col_add_menu["menu"]; menu.delete(0, "end")
+        avail = [c for c in _ALL_COLS if c not in self._info_cols]
+        for c in avail:
+            menu.add_command(label=c, command=lambda v=c: self._add_info_col(v))
+        self._col_add.set(avail[0] if avail else "")
+        self.cfg.gui.info_columns = list(self._info_cols)   # kept in sync for Save
+
+    def _move_info_col(self, d: int) -> None:
+        sel = self._col_list.curselection()
+        if not sel:
+            return
+        i = sel[0]; j = i + d
+        if 0 <= j < len(self._info_cols):
+            self._info_cols[i], self._info_cols[j] = self._info_cols[j], self._info_cols[i]
+            self._refresh_info_col_editor()
+            self._col_list.selection_set(j)
+
+    def _remove_info_col(self) -> None:
+        sel = self._col_list.curselection()
+        if not sel:
+            return
+        c = self._info_cols[sel[0]]
+        if c in _LOCKED_COLS:
+            messagebox.showinfo("Columns", f"'{c}' is always shown.", parent=self)
+            return
+        self._info_cols.pop(sel[0]); self._refresh_info_col_editor()
+
+    def _add_info_col(self, name: str) -> None:
+        if name and name not in self._info_cols:
+            self._info_cols.append(name); self._refresh_info_col_editor()
 
     def on_save(self) -> None:
         try:

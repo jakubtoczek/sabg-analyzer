@@ -186,6 +186,12 @@ class GuiParams:
     # Shown as mm/µm labels; the live + exported bars use these. Edit to taste.
     scalebar_values: list[float] = field(
         default_factory=lambda: [10000, 5000, 2000, 1000, 500, 200, 100, 50, 20, 10])
+    # Info window: which columns the section table shows, in order. Editable in the Config
+    # menu (Other settings → Info table columns). `file`, `scene` and `analyze` are always
+    # shown (the editor won't remove them); `#` = the section's 1-based scan index (the N in
+    # "[N/total]"). Other names map to sections.csv identity columns.
+    info_columns: list[str] = field(
+        default_factory=lambda: ["#", "file", "scene", "analyze", "animal", "group", "tag"])
 
 
 @dataclass
