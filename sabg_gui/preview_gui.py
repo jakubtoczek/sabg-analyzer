@@ -237,13 +237,20 @@ class PreviewWindow(tk.Toplevel):
         self.btn_draw_roi = tk.Button(row1, text="Draw ROI", command=self.on_draw_roi)
         self.btn_draw_roi.pack(side="left", padx=2, pady=2)
         self._roi_btn_bg = self.btn_draw_roi.cget("background")   # for the sticky toggle
+        gw.Tooltip(self.btn_draw_roi, "Sticky toggle: drag a rectangle on the Thumbnail to mark a "
+                   "region (capped at gui.preview_roi_cap_um). Click again to return to pan. "
+                   "Or type an exact centre+size below.")
         # Drawing no longer auto-opens: adjust the rectangle, then "Open ROI".
         self.btn_open_roi = tk.Button(row1, text="Open ROI", command=self.on_open_roi,
                                       state="disabled")
         self.btn_open_roi.pack(side="left", padx=2)
+        gw.Tooltip(self.btn_open_roi, "Read the marked rectangle at full resolution into the ROI tab "
+                   "for detection / export.")
         self.btn_clear_roi = tk.Button(row1, text="Clear ROI", command=self.clear_roi,
                                        state="disabled")
         self.btn_clear_roi.pack(side="left", padx=2)
+        gw.Tooltip(self.btn_clear_roi, "Drop the current/pending ROI and go back to the editable "
+                   "thumbnail.")
         tk.Label(row1, text="resolution").pack(side="left", padx=(10, 0))
         labels = self._res_labels()
         ttk.OptionMenu(row1, self.view_res, labels[0], *labels,
@@ -251,21 +258,57 @@ class PreviewWindow(tk.Toplevel):
         self.res_label = tk.Label(row1, text="loaded: —", fg="#557", font=("Segoe UI", 8))
         self.res_label.pack(side="left", padx=(6, 0))
 
+        # precise ROI: type an exact centre + size (µm) for a reproducible crop (e.g. re-export
+        # the same location to compare QC overlays). Coords are absolute scene µm, matching
+        # fovs.csv center_x_um/center_y_um.
+        rowroi = tk.Frame(barwrap)
+        rowroi.pack(fill="x")
+        tk.Label(rowroi, text="exact ROI (µm)  cx").pack(side="left", padx=(2, 1))
+        self.roi_cx_var = tk.StringVar(); self.roi_cy_var = tk.StringVar()
+        self.roi_w_var = tk.StringVar();  self.roi_h_var = tk.StringVar()
+        e_cx = tk.Entry(rowroi, textvariable=self.roi_cx_var, width=7); e_cx.pack(side="left")
+        tk.Label(rowroi, text="cy").pack(side="left", padx=(4, 1))
+        e_cy = tk.Entry(rowroi, textvariable=self.roi_cy_var, width=7); e_cy.pack(side="left")
+        tk.Label(rowroi, text="w").pack(side="left", padx=(4, 1))
+        e_w = tk.Entry(rowroi, textvariable=self.roi_w_var, width=6); e_w.pack(side="left")
+        tk.Label(rowroi, text="h").pack(side="left", padx=(4, 1))
+        e_h = tk.Entry(rowroi, textvariable=self.roi_h_var, width=6); e_h.pack(side="left")
+        btn_set = tk.Button(rowroi, text="Set", command=self._set_roi_from_fields)
+        btn_set.pack(side="left", padx=(4, 2))
+        self.roi_px_lbl = tk.Label(rowroi, text="", fg="#557", font=("Segoe UI", 8))
+        self.roi_px_lbl.pack(side="left", padx=(4, 0))
+        for _w in (e_cx, e_cy, e_w, e_h):
+            _w.bind("<Return>", lambda _e: self._set_roi_from_fields())
+        gw.Tooltip(btn_set, "Set the ROI to an exact centre (cx, cy) and size (w, h) in microns — "
+                   "absolute scene coordinates, matching fovs.csv center_x_um/center_y_um. Re-enter "
+                   "the same numbers to reproduce any crop. Enter in a field also applies.")
+
         # row 2: shared view tools + the exclusion-brush toggle (strips open below barwrap)
         self._add_shared_tools(row2, "thumb", strip_parent=tab, after_widget=barwrap)
         # manual exclusion brush in a collapsed strip (paint regions out of
         # numerator+denominator; rarely needed, e.g. muscle next to tumour)
         bar2 = self._collapsible_strip(row2, tab, "✏ exclusion", after_widget=barwrap)
         tk.Label(bar2, text="exclusion:").pack(side="left", padx=(2, 2))
+        _brush_tips = {
+            "off": "Brush off — left-drag pans the thumbnail.",
+            "draw": "Paint a region OUT of both numerator and denominator (e.g. muscle next to tumour).",
+            "erase": "Erase previously-painted exclusion.",
+        }
         for txt, val in (("off", "off"), ("draw ✏", "draw"), ("erase ⌫", "erase")):
-            tk.Radiobutton(bar2, text=txt, value=val, variable=self.brush_var,
-                           command=self._on_brush_mode).pack(side="left")
+            rb = tk.Radiobutton(bar2, text=txt, value=val, variable=self.brush_var,
+                                command=self._on_brush_mode)
+            rb.pack(side="left")
+            gw.Tooltip(rb, _brush_tips[val])
         tk.Label(bar2, text="size").pack(side="left", padx=(8, 0))
-        ttk.Scale(bar2, from_=2, to=60, variable=self.brush_size, length=90).pack(side="left")
+        sc_brush = ttk.Scale(bar2, from_=2, to=60, variable=self.brush_size, length=90)
+        sc_brush.pack(side="left")
+        gw.Tooltip(sc_brush, "Brush radius (thumbnail px) for the exclusion paint.")
         self.btn_clear_excl = tk.Button(bar2, text="Clear excl", command=self.on_clear_exclude)
         self.btn_clear_excl.pack(side="left", padx=(8, 2))
+        gw.Tooltip(self.btn_clear_excl, "Clear the whole exclusion mask for this section.")
         self.btn_save_excl = tk.Button(bar2, text="Save excl", command=self.on_save_exclude)
         self.btn_save_excl.pack(side="left", padx=2)
+        gw.Tooltip(self.btn_save_excl, "Persist this section's exclusion mask so analyze reuses it.")
 
         self.thumb_fig = Figure(figsize=(6, 6), tight_layout=True)
         self.thumb_ax = self.thumb_fig.add_subplot(111)
@@ -1156,12 +1199,16 @@ class PreviewWindow(tk.Toplevel):
         """Per-ROI seed-threshold controls, injected into "2. SABG detection". Auto
         (default) estimates the seed on the current ROI's tissue; untick to type a
         manual seed (persisted as scenes.<key>.threshold on Export → config)."""
-        tk.Checkbutton(parent, text="Seed: Auto on ROI", variable=self.manual_auto,
-                       command=self._on_manual_toggle).grid(row=0, column=0, sticky="w")
+        cb_auto = tk.Checkbutton(parent, text="Seed: Auto on ROI", variable=self.manual_auto,
+                                 command=self._on_manual_toggle)
+        cb_auto.grid(row=0, column=0, sticky="w")
+        gw.Tooltip(cb_auto, "On: estimate the seed/high threshold from this ROI's tissue each "
+                   "recompute. Off: type a fixed seed below (saved as scenes.<key>.threshold on Export).")
         tk.Label(parent, text="manual:").grid(row=0, column=1, sticky="e", padx=(8, 2))
         self.manual_entry = tk.Entry(parent, textvariable=self.manual_thr, width=10,
                                      state="disabled")
         self.manual_entry.grid(row=0, column=2, sticky="w")
+        gw.Tooltip(self.manual_entry, "Fixed seed/high threshold for this section (used when Auto is off).")
         self.manual_thr.trace_add("write", lambda *_: self._on_manual_seed_edit())
 
     # -- picker ------------------------------------------------------------
@@ -1476,7 +1523,67 @@ class PreviewWindow(tk.Toplevel):
         self.status.configure(
             text=f"ROI {ww}x{hh}px (~{um:.0f}µm, ~{roi_mb:.0f} MB){capped} — adjust, then 'Open ROI'.")
         self._update_roi_buttons()
+        self._update_roi_fields_from_rect()    # echo cx/cy/w/h into the exact-ROI fields
         self._update_result_provenance()      # result now lags the new rectangle
+
+    def _update_roi_fields_from_rect(self) -> None:
+        """Reflect the pending full-res ``roi_rect`` into the exact-ROI µm fields + px readout."""
+        if not hasattr(self, "roi_cx_var") or self.roi_rect is None or self.entry is None:
+            return
+        px = self.entry.scene.pixel_size_um or 0
+        x, y, ww, hh = self.roi_rect
+        if px:
+            self.roi_cx_var.set(f"{(x + ww / 2) * px:.0f}")
+            self.roi_cy_var.set(f"{(y + hh / 2) * px:.0f}")
+            self.roi_w_var.set(f"{ww * px:.0f}")
+            self.roi_h_var.set(f"{hh * px:.0f}")
+            self.roi_px_lbl.configure(text=f"= {ww}×{hh} px @ {px:.3g} µm/px")
+        else:
+            self.roi_px_lbl.configure(text=f"= {ww}×{hh} px (no µm scale)")
+
+    def _set_roi_from_fields(self) -> None:
+        """Apply the typed centre+size (µm) as the pending ROI rectangle — exact and
+        reproducible. Coords are absolute scene µm (match fovs.csv); the size honours the
+        same cap + scene-bounds clamp as a drawn rectangle (see preview.roi_rect_full)."""
+        if self.entry is None or self.disp_rgb is None:
+            messagebox.showinfo("ROI", "Pick a section first.", parent=self)
+            return
+        sc = self.entry.scene
+        px = sc.pixel_size_um
+        if not px:
+            messagebox.showinfo("ROI", "This scene has no µm/px scale; draw the ROI instead.", parent=self)
+            return
+        try:
+            cx_um = float(self.roi_cx_var.get()); cy_um = float(self.roi_cy_var.get())
+            w_um = float(self.roi_w_var.get());   h_um = float(self.roi_h_var.get())
+        except ValueError:
+            messagebox.showinfo("ROI", "Enter numbers for cx, cy, w and h (µm).", parent=self)
+            return
+        ww = max(1, int(round(w_um / px)))
+        hh = max(1, int(round(h_um / px)))
+        cap_um = self.cfg.gui.preview_roi_cap_um
+        if cap_um:                                  # honour the same cap as drawing
+            cap_px = max(1, int(round(cap_um / px)))
+            ww = min(ww, cap_px); hh = min(hh, cap_px)
+        x = int(round(cx_um / px - ww / 2))
+        y = int(round(cy_um / px - hh / 2))
+        x = max(sc.x, min(x, sc.x + sc.w - 1))      # clamp to scene bounds
+        y = max(sc.y, min(y, sc.y + sc.h - 1))
+        ww = max(1, min(ww, sc.x + sc.w - x))
+        hh = max(1, min(hh, sc.y + sc.h - y))
+        self.roi_rect = (x, y, ww, hh)
+        self.nb.select(0)
+        if self.roi_rgb is not None:                # replace any opened ROI
+            self.roi_rgb = None
+        if not self.selector.get_active():
+            self._set_draw_active(True)
+        self._clear_saved_roi_outline()
+        self._sync_selector_to_rect()               # draw the rectangle on the thumbnail
+        self._update_roi_fields_from_rect()         # echo back the clamped/capped result
+        self._update_roi_buttons()
+        self._update_result_provenance()
+        self.status.configure(
+            text=f"ROI set {ww}x{hh}px (~{ww * px:.0f}×{hh * px:.0f}µm) — 'Open ROI' to read.")
 
     def on_open_roi(self) -> None:
         """Read the pending rectangle at full resolution into the ROI tab."""

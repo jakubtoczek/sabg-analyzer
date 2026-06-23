@@ -291,7 +291,7 @@ FOLD_FIELDS = [
     ("fold", "exclude_from_tissue", "bool", "exclude_from_tissue", "Exclude the fold band from countable tissue (denominator)."),
 ]
 DETECT_FIELDS = [
-    ("detection", "primary", "choice", "primary", "Primary SABG score.", ["deconvolution", "opponent"]),
+    ("detection", "primary", "choice", "primary", "Which colour score drives detection: deconvolution (stain-unmixed SABG channel, default) or opponent (teal-vs-magenta colour).", ["deconvolution", "opponent"]),
     ("detection", "require_agreement", "bool", "require_agreement", "SABG+ only where BOTH scores clear their thresholds."),
     ("threshold", "method", "choice", "threshold.method", "Auto-threshold method on the tissue histogram.", ["triangle", "otsu", "percentile", "fixed"]),
     ("threshold", "scale", "float", "threshold.scale", "Seed/high threshold = auto-threshold x this (raise to be stricter)."),
@@ -299,8 +299,8 @@ DETECT_FIELDS = [
     ("threshold", "min_score", "float", "threshold.min_score", "Clamp the threshold to at least this."),
     ("detection", "hysteresis", "bool", "hysteresis", "Grow each seed into the connected faint teal around it."),
     ("detection", "hyst_low_scale", "float", "hyst_low_scale", "Grow/low threshold = seed threshold x this (lower = grow further)."),
-    ("detection", "hyst_teal_min", "float", "hyst_teal_min", "Only grow into pixels at least this teal (opponent)."),
-    ("detection", "expand_px", "int", "expand_px", "Dilate the final positive mask by this many px."),
+    ("detection", "hyst_teal_min", "float", "hyst_teal_min", "Grow only into pixels at least this teal (opponent score, 0-1); stops the grow leaking into non-teal tissue."),
+    ("detection", "expand_px", "int", "expand_px", "Grow the final SABG+ area outward by this many pixels (0 = off)."),
     ("detection", "expand_teal_min", "float", "expand_teal_min", "Only expand into pixels this teal (0 = any tissue)."),
     ("detection", "auto_estimate", "bool", "auto_estimate", "Estimate the SABG stain direction from this ROI's most-teal tissue."),
 ]
