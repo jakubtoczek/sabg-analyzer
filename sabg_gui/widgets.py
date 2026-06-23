@@ -197,12 +197,16 @@ class CanvasNav:
     the exclusion brush is active. Defaults to always-on (Info viewers, ROI tab).
     """
 
-    def __init__(self, canvas, ax, can_left_pan=None, on_view_change=None) -> None:
+    def __init__(self, canvas, ax, can_left_pan=None, on_view_change=None,
+                 wheel_guard=None) -> None:
         self.canvas = canvas
         self.ax = ax
         self._home = None
         self._panning = False
         self._can_left_pan = can_left_pan
+        # Optional predicate(event)->bool; when it returns False the wheel is NOT zoomed
+        # (another consumer owns it, e.g. Ctrl+wheel adjusting the exclusion brush size).
+        self._wheel_guard = wheel_guard
         # Optional no-arg callback fired after the view EXTENT changes (wheel-zoom +
         # Reset view). Used by the Preview to rescale a live scale bar. Pan is excluded:
         # a corner-anchored overlay stays put and only needs the normal redraw.
@@ -229,6 +233,8 @@ class CanvasNav:
     def _zoom(self, e) -> None:
         if e.inaxes is not self.ax or e.xdata is None:
             return
+        if self._wheel_guard is not None and not self._wheel_guard(e):
+            return                                     # consumer (Ctrl+brush size) owns this wheel
         scale = 0.8 if e.button == "up" else 1.25      # wheel up = zoom in
         x0, x1 = self.ax.get_xlim()
         y0, y1 = self.ax.get_ylim()
@@ -1220,8 +1226,20 @@ class _PickerHandle:
         return "break"
 
 
+def _badge_bg(img) -> str:
+    """A light-grey badge background blended 50% with the thumbnail's corner (section
+    background) colour, so the scan-# reads like a translucent grey chip over the section."""
+    grey = (211, 211, 211)
+    try:
+        px = img.get(0, 0)
+        r, g, b = (int(v) for v in px.split()) if isinstance(px, str) else px[:3]
+    except Exception:
+        r, g, b = grey
+    return "#%02x%02x%02x" % ((r + grey[0]) // 2, (g + grey[1]) // 2, (b + grey[2]) // 2)
+
+
 def thumbnail_picker(parent, entries, on_select: Callable, photo_refs: list,
-                     *, target_px: int = 150, selected=None) -> "_PickerHandle":
+                     *, target_px: int = 150, selected=None, numbers=None) -> "_PickerHandle":
     """Render proportional section thumbnails into *parent* (a frame).
 
     *entries* are ``preview.SectionEntry`` (``.thumb_path``, ``.alias``,
@@ -1267,6 +1285,13 @@ def thumbnail_picker(parent, entries, on_select: Callable, photo_refs: list,
             button.pack()
             button.bind("<Up>", lambda _ev: handle.step(-1))
             button.bind("<Down>", lambda _ev: handle.step(1))
+            # scan-order # badge, overlaid on the thumb's top-left corner (place => no
+            # extra spacing between sections). Background = section colour blended w/ grey.
+            n = None if numbers is None else numbers.get(e.scene.key)
+            if n is not None:
+                tk.Label(cell, text=str(n), font=("Segoe UI", 7, "bold"),
+                         bg=_badge_bg(originals.get(e.thumb_path)), fg="#222",
+                         bd=0, padx=2, pady=0).place(in_=button, x=1, y=1)
         txt = e.alias + ("  (skip)" if e.skipped else "")
         lbl = tk.Label(cell, text=txt, font=("Segoe UI", 7),
                        fg="#888" if e.skipped else "#000")

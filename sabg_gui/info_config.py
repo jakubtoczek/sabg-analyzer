@@ -115,6 +115,7 @@ class InfoWindow(tk.Toplevel):
         self._photo_refs: list[tk.PhotoImage] = []
         self.cell_vars: dict[tuple[int, str], tk.Variable] = {}
         self._row_anchor: dict[tuple[str, str], tuple[tk.Widget, tk.Widget]] = {}  # (file, scene) cells
+        self._row_cells: dict[tuple[str, str], list] = {}  # all cell widgets per row (for the band)
         self._hl_cells: list[tk.Widget] = []             # currently-highlighted row cells
         self._hl_base: dict[tk.Widget, str] = {}         # widget -> its un-highlighted bg
         self.entries: list = []
@@ -242,8 +243,10 @@ class InfoWindow(tk.Toplevel):
             return
         ordered = gw.order_sections(self.entries, self.order_mode.get(), self.out_dir)
         cur = self.entries[self.cur_idx] if 0 <= self.cur_idx < len(self.entries) else None
+        numbers = {e.scene.key: i + 1 for i, e in enumerate(self.entries)}  # scan-order #
         self._picker = gw.thumbnail_picker(
-            self._pick.interior, ordered, self._on_pick, self._photo_refs, selected=cur)
+            self._pick.interior, ordered, self._on_pick, self._photo_refs,
+            selected=cur, numbers=numbers)
         if getattr(self, "_order_menu", None) is not None:
             gw.sync_order_menu_state(self._order_menu, self.out_dir)
 
@@ -325,33 +328,45 @@ class InfoWindow(tk.Toplevel):
         for i, (_, r) in enumerate(self.df.iterrows(), start=1):
             file_v, scene_v = str(r["file"]), str(r["scene"])
             file_w = scene_w = None
+            row_widgets = []
             for c, col in enumerate(self._cols):
                 if col == "#":
-                    _selectable(parent, str(i), font=("Consolas", 8)).grid(
-                        row=i, column=c, sticky="w", padx=3)
+                    w = _selectable(parent, str(i), font=("Consolas", 8))
+                    w.grid(row=i, column=c, sticky="w", padx=3)
                 elif col == "file":
-                    file_w = _selectable(parent, file_v, font=("Consolas", 8))
-                    file_w.grid(row=i, column=c, sticky="w", padx=3)
+                    file_w = w = _selectable(parent, file_v, font=("Consolas", 8))
+                    w.grid(row=i, column=c, sticky="w", padx=3)
                 elif col == "scene":
-                    scene_w = _selectable(parent, scene_v, font=("Consolas", 8))
-                    scene_w.grid(row=i, column=c, sticky="w", padx=3)
+                    scene_w = w = _selectable(parent, scene_v, font=("Consolas", 8))
+                    w.grid(row=i, column=c, sticky="w", padx=3)
                 elif col == "analyze":
                     var = tk.BooleanVar(
                         value=not metadata.section_skipped({"analyze": r.get("analyze", "yes")}))
-                    tk.Checkbutton(parent, variable=var).grid(row=i, column=c)
+                    w = tk.Checkbutton(parent, variable=var)
+                    w.grid(row=i, column=c)
                     self.cell_vars[(i, col)] = var
                 else:
                     var = tk.StringVar(value=str(r.get(col, "")))
-                    tk.Entry(parent, textvariable=var, width=10).grid(
-                        row=i, column=c, sticky="ew", padx=1)
+                    w = tk.Entry(parent, textvariable=var, width=10)
+                    w.grid(row=i, column=c, sticky="ew", padx=1)
                     self.cell_vars[(i, col)] = var
+                row_widgets.append(w)
             if file_w is not None and scene_w is not None:
                 self._row_anchor[(file_v, scene_v)] = (file_w, scene_w)
+            self._row_cells[(file_v, scene_v)] = row_widgets
         self._apply_col_weights(parent)
 
     @staticmethod
     def _bg_opt(w) -> str:
-        return "readonlybackground" if "readonlybackground" in w.keys() else "background"
+        # State-aware: a readonly Entry only shows `readonlybackground`; normal-state
+        # widgets (Checkbutton, editable Entry) show `background`. Picking the right one
+        # makes the highlight render across the whole row, not just the flat readonly cells.
+        try:
+            if str(w.cget("state")) == "readonly" and "readonlybackground" in w.keys():
+                return "readonlybackground"
+        except tk.TclError:
+            pass
+        return "background" if "background" in w.keys() else "bg"
 
     def _highlight_row(self, cells) -> None:
         """Persistently highlight the selected row's file+scene cells (yellow) and clear the
@@ -375,13 +390,15 @@ class InfoWindow(tk.Toplevel):
 
     def _focus_section(self, entry) -> None:
         key = (entry.scene.file_stem, str(entry.scene.scene_index))
-        cells = self._row_anchor.get(key)
+        cells = self._row_cells.get(key)
         if not cells:
             return
-        self._highlight_row(cells)              # highlight both the file and scene cells
-        self.table.canvas.update_idletasks()
-        total = max(1, self.table.interior.winfo_height())
-        self.table.canvas.yview_moveto(max(0.0, cells[1].winfo_y() / total))
+        self._highlight_row(cells)              # persistent yellow band across the whole row
+        anchor = self._row_anchor.get(key)
+        if anchor is not None:
+            self.table.canvas.update_idletasks()
+            total = max(1, self.table.interior.winfo_height())
+            self.table.canvas.yview_moveto(max(0.0, anchor[1].winfo_y() / total))
 
     def _set_all_analyze(self, value: bool) -> None:
         """Tick / untick every section's analyze box at once (bulk include/exclude)."""

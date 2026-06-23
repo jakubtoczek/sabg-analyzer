@@ -316,9 +316,11 @@ class PreviewWindow(tk.Toplevel):
         self.thumb_canvas = FigureCanvasTkAgg(self.thumb_fig, master=tab)
         self.thumb_canvas.get_tk_widget().pack(fill="both", expand=True)
         # Left-drag pans the thumbnail UNLESS a ROI is being drawn or the brush is on.
-        self.thumb_nav = CanvasNav(self.thumb_canvas, self.thumb_ax,
-                                   can_left_pan=self._thumb_can_pan,
-                                   on_view_change=lambda: self._refresh_live_scalebar("thumb"))
+        self.thumb_nav = CanvasNav(
+            self.thumb_canvas, self.thumb_ax, can_left_pan=self._thumb_can_pan,
+            on_view_change=lambda: self._refresh_live_scalebar("thumb"),
+            # Ctrl+wheel over the thumb resizes the exclusion brush instead of zooming.
+            wheel_guard=lambda e: not (self.brush_mode is not None and self._ctrl_held(e)))
         # useblit + props => the rectangle renders live while dragging; interactive
         # handles (+ drag_from_anywhere) let it be resized/moved before opening.
         self.selector = RectangleSelector(
@@ -339,6 +341,7 @@ class PreviewWindow(tk.Toplevel):
         self.thumb_canvas.mpl_connect("button_release_event", self._on_brush_release)
         self.thumb_canvas.mpl_connect("axes_leave_event", self._on_brush_leave)
         self.thumb_canvas.mpl_connect("figure_leave_event", self._on_brush_leave)
+        self.thumb_canvas.mpl_connect("scroll_event", self._on_brush_wheel)
 
     def _build_roi_tab(self) -> None:
         tab = tk.Frame(self.nb)
@@ -1026,6 +1029,17 @@ class PreviewWindow(tk.Toplevel):
         self._hide_brush_cursor()
         self._hide_brush_line()
 
+    def _on_brush_wheel(self, e) -> None:
+        """Ctrl+wheel over the thumbnail resizes the exclusion brush (within the slider
+        2..60 limits) instead of zooming. CanvasNav's wheel_guard skips the zoom for the
+        same event, so the two don't fight."""
+        if self.brush_mode is None or e.inaxes is not self.thumb_ax or not self._ctrl_held(e):
+            return
+        new = int(self.brush_size.get()) + (2 if e.button == "up" else -2)
+        self.brush_size.set(max(2, min(60, new)))      # clamp to the slider range
+        if e.xdata is not None:                        # live-resize the hover outline
+            self._update_brush_cursor(e.xdata, e.ydata)
+
     def _update_brush_cursor(self, x: float, y: float) -> None:
         """Show a dashed outline circle at the pointer, sized to the brush (so the user
         sees what will be painted/erased). Magenta for draw, black for erase."""
@@ -1293,9 +1307,10 @@ class PreviewWindow(tk.Toplevel):
             w.destroy()
         self._photo_refs.clear()
         ordered = gw.order_sections(self._sections, self.order_mode.get(), self.out_dir)
+        numbers = {e.scene.key: i + 1 for i, e in enumerate(self._sections)}  # scan-order #
         self._picker = gw.thumbnail_picker(
             self.pick.interior, ordered, self._select_section, self._photo_refs,
-            selected=self.entry)
+            selected=self.entry, numbers=numbers)
         if getattr(self, "_order_menu", None) is not None:
             gw.sync_order_menu_state(self._order_menu, self.out_dir)
 
