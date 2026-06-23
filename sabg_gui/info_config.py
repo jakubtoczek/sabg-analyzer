@@ -115,7 +115,8 @@ class InfoWindow(tk.Toplevel):
         self._photo_refs: list[tk.PhotoImage] = []
         self.cell_vars: dict[tuple[int, str], tk.Variable] = {}
         self._row_anchor: dict[tuple[str, str], tuple[tk.Widget, tk.Widget]] = {}  # (file, scene) cells
-        self._flash_state: dict[tk.Widget, tuple] = {}   # widget -> (base_color, after_id)
+        self._hl_cells: list[tk.Widget] = []             # currently-highlighted row cells
+        self._hl_base: dict[tk.Widget, str] = {}         # widget -> its un-highlighted bg
         self.entries: list = []
         self.cur_idx = 0
         self._picker = None                           # picker handle (marker + arrow nav)
@@ -348,41 +349,39 @@ class InfoWindow(tk.Toplevel):
                 self._row_anchor[(file_v, scene_v)] = (file_w, scene_w)
         self._apply_col_weights(parent)
 
-    def _flash_bg(self, w, color: str = "#fff3b0", restore_ms: int = 1200) -> None:
-        """Flash a cell's background, robust to rapid re-clicks: the base colour is captured
-        once (never the already-flashed value) and any in-flight restore is cancelled, so a
-        cell can't get stuck yellow."""
-        opt = "readonlybackground" if "readonlybackground" in w.keys() else "background"
-        st = self._flash_state.get(w)
-        if st is None:
-            base = w.cget(opt)                  # capture the TRUE base only the first time
-        else:
-            base, prev_id = st
-            try:
-                self.after_cancel(prev_id)
-            except Exception:
-                pass
-        w.configure(**{opt: color})
-        aid = self.after(restore_ms, lambda: self._restore_bg(w, opt, base))
-        self._flash_state[w] = (base, aid)
+    @staticmethod
+    def _bg_opt(w) -> str:
+        return "readonlybackground" if "readonlybackground" in w.keys() else "background"
 
-    def _restore_bg(self, w, opt, base) -> None:
-        try:
-            w.configure(**{opt: base})
-        except Exception:
-            pass
-        self._flash_state.pop(w, None)
+    def _highlight_row(self, cells) -> None:
+        """Persistently highlight the selected row's file+scene cells (yellow) and clear the
+        previously-highlighted row. Persistent (not a brief flash) so the selected section is
+        always visible; bases are captured once so colours can't drift."""
+        keep = set(cells)
+        for w in self._hl_cells:                # un-highlight the old row
+            if w not in keep:
+                try:
+                    w.configure(**{self._bg_opt(w): self._hl_base.get(w, "white")})
+                except tk.TclError:
+                    pass
+        for w in cells:
+            opt = self._bg_opt(w)
+            self._hl_base.setdefault(w, w.cget(opt))
+            try:
+                w.configure(**{opt: "#fff3b0"})
+            except tk.TclError:
+                pass
+        self._hl_cells = list(cells)
 
     def _focus_section(self, entry) -> None:
         key = (entry.scene.file_stem, str(entry.scene.scene_index))
         cells = self._row_anchor.get(key)
         if not cells:
             return
+        self._highlight_row(cells)              # highlight both the file and scene cells
         self.table.canvas.update_idletasks()
         total = max(1, self.table.interior.winfo_height())
         self.table.canvas.yview_moveto(max(0.0, cells[1].winfo_y() / total))
-        for w in cells:                         # highlight both the file and scene cells
-            self._flash_bg(w)
 
     def _set_all_analyze(self, value: bool) -> None:
         """Tick / untick every section's analyze box at once (bulk include/exclude)."""
