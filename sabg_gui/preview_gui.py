@@ -286,7 +286,8 @@ class PreviewWindow(tk.Toplevel):
         self._add_shared_tools(row2, "thumb", strip_parent=tab, after_widget=barwrap)
         # manual exclusion brush in a collapsed strip (paint regions out of
         # numerator+denominator; rarely needed, e.g. muscle next to tumour)
-        bar2 = self._collapsible_strip(row2, tab, "✏ exclusion", after_widget=barwrap)
+        bar2 = self._collapsible_strip(row2, tab, "✏ exclusion", after_widget=barwrap,
+                                       on_close=lambda: self._set_brush_mode(None))
         tk.Label(bar2, text="exclusion:").pack(side="left", padx=(2, 2))
         self.btn_brush_draw = tk.Button(bar2, text="draw ✏", command=lambda: self._toggle_brush("draw"))
         self.btn_brush_draw.pack(side="left")
@@ -376,7 +377,8 @@ class PreviewWindow(tk.Toplevel):
         return not self._wb_pick
 
     def _collapsible_strip(self, btn_parent: tk.Frame, strip_parent: tk.Frame,
-                           label: str, after_widget: tk.Widget | None = None) -> tk.Frame:
+                           label: str, after_widget: tk.Widget | None = None,
+                           on_close=None) -> tk.Frame:
         """A horizontal strip (a child of *strip_parent*, packed after *after_widget*
         when expanded) toggled by a button on *btn_parent*. Collapsed by default — for
         rarely-used controls (scale bar, exclusion brush). *after_widget* defaults to
@@ -390,6 +392,8 @@ class PreviewWindow(tk.Toplevel):
             if strip.winfo_manager():
                 strip.pack_forget()
                 btn.configure(text=f"{label} ▸")
+                if on_close is not None:       # e.g. drop the exclusion brush when its strip closes
+                    on_close()
             else:
                 strip.pack(fill="x", after=after)
                 btn.configure(text=f"{label} ▾")
@@ -2165,7 +2169,9 @@ class PreviewWindow(tk.Toplevel):
              "'Clear ROI' (enabled once a rectangle exists) starts over."),
             ("Exclusion brush (Thumbnail tab)",
              "Paint regions to drop from analysis (e.g. muscle next to tumour). "
-             "'draw' adds, 'erase' removes, 'size' sets the brush; 'Clear excl' wipes it. "
+             "'draw'/'erase' are sticky toggles (like Draw ROI) — only one is active at a "
+             "time, and closing the '✏ exclusion' strip turns both off. Left-drag paints; "
+             "middle/right-drag still pans. 'size' sets the brush; 'Clear excl' wipes it. "
              "'Save excl' writes the mask and points the config at it — excluded pixels "
              "count as neither SABG+ nor tissue. 'Export → config' persists the link."),
             ("White-balanced",
