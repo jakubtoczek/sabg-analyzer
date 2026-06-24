@@ -165,8 +165,7 @@ class PreviewWindow(tk.Toplevel):
         #                          reflecting the auto threshold back into the seed box
 
         # manual exclusion mask (preview-drawn, display-resolution uint8 0/255)
-        self.brush_var = tk.StringVar(value="off")         # off | draw | erase
-        self.brush_mode: str | None = None
+        self.brush_mode: str | None = None                 # None | draw | erase
         self.brush_size = tk.IntVar(value=18)
         self.excl_mask: np.ndarray | None = None
         self._excl_artist = None                           # exclusion overlay AxesImage
@@ -289,16 +288,13 @@ class PreviewWindow(tk.Toplevel):
         # numerator+denominator; rarely needed, e.g. muscle next to tumour)
         bar2 = self._collapsible_strip(row2, tab, "✏ exclusion", after_widget=barwrap)
         tk.Label(bar2, text="exclusion:").pack(side="left", padx=(2, 2))
-        _brush_tips = {
-            "off": "Brush off — left-drag pans the thumbnail.",
-            "draw": "Paint a region OUT of both numerator and denominator (e.g. muscle next to tumour).",
-            "erase": "Erase previously-painted exclusion.",
-        }
-        for txt, val in (("off", "off"), ("draw ✏", "draw"), ("erase ⌫", "erase")):
-            rb = tk.Radiobutton(bar2, text=txt, value=val, variable=self.brush_var,
-                                command=self._on_brush_mode)
-            rb.pack(side="left")
-            gw.Tooltip(rb, _brush_tips[val])
+        self.btn_brush_draw = tk.Button(bar2, text="draw ✏", command=lambda: self._toggle_brush("draw"))
+        self.btn_brush_draw.pack(side="left")
+        gw.Tooltip(self.btn_brush_draw, "Toggle: paint a region OUT of both numerator and "
+                                        "denominator (e.g. muscle next to tumour). Left-drag only.")
+        self.btn_brush_erase = tk.Button(bar2, text="erase ⌫", command=lambda: self._toggle_brush("erase"))
+        self.btn_brush_erase.pack(side="left")
+        gw.Tooltip(self.btn_brush_erase, "Toggle: erase previously-painted exclusion. Left-drag only.")
         tk.Label(bar2, text="size").pack(side="left", padx=(8, 0))
         sc_brush = ttk.Scale(bar2, from_=2, to=60, variable=self.brush_size, length=90)
         sc_brush.pack(side="left")
@@ -703,8 +699,7 @@ class PreviewWindow(tk.Toplevel):
         self._wb_pick = active
         if active:
             self._set_draw_active(False)          # picking and ROI-draw are exclusive
-            self.brush_var.set("off")
-            self.brush_mode = None
+            self._set_brush_mode(None)
         for sel in (getattr(self, "wp_selector_thumb", None),
                     getattr(self, "wp_selector_roi", None)):
             if sel is not None:
@@ -966,12 +961,24 @@ class PreviewWindow(tk.Toplevel):
                 return m > 127
         return None
 
-    def _on_brush_mode(self) -> None:
-        mode = self.brush_var.get()
-        self.brush_mode = None if mode == "off" else mode
+    def _toggle_brush(self, mode: str) -> None:
+        """Sticky draw/erase toggle (mirrors Draw ROI): re-clicking the active mode turns
+        the brush off; clicking the other mode switches to it. Only one is ever active."""
+        self._set_brush_mode(None if self.brush_mode == mode else mode)
+
+    def _set_brush_mode(self, mode: str | None) -> None:
+        """Set the exclusion brush mode and reflect it on the two sticky buttons (sunken +
+        tinted when active, raised otherwise — like Draw ROI)."""
+        self.brush_mode = mode
+        for m, attr in (("draw", "btn_brush_draw"), ("erase", "btn_brush_erase")):
+            btn = getattr(self, attr, None)
+            if btn is not None:
+                on = (m == mode)
+                btn.configure(relief="sunken" if on else "raised",
+                              bg="#cfe3ff" if on else self._roi_btn_bg)
         # brush, ROI-draw and left-pan all use the left button -> brushing is
         # exclusive: it turns the rectangle selector off (pan resumes when off).
-        if self.brush_mode is not None:
+        if mode is not None:
             self._set_draw_active(False)
         else:
             self._hide_brush_cursor()
@@ -993,6 +1000,8 @@ class PreviewWindow(tk.Toplevel):
         return "control" in k or "ctrl" in k
 
     def _on_brush_press(self, e) -> None:
+        if e.button != 1:                      # left-only: middle/right pan via CanvasNav
+            return
         if self.brush_mode is None or e.inaxes is not self.thumb_ax or e.xdata is None:
             return
         if self._ctrl_held(e) and self._last_paint_pt is not None:
@@ -1337,8 +1346,7 @@ class PreviewWindow(tk.Toplevel):
         self._image_wp = None                 # forget any transient image-scope manual pick
         self._excl_dirty = False              # a freshly loaded section starts clean
         self._excl_artist = None
-        self.brush_var.set("off")
-        self.brush_mode = None
+        self._set_brush_mode(None)
         self.status.configure(text=f"{entry.alias}: loading view…")
         self.nb.select(0)
         self._reload_display(view_frac=saved.get("view_frac"))
@@ -1514,8 +1522,7 @@ class PreviewWindow(tk.Toplevel):
             return
         if self.roi_rgb is not None:           # an opened ROI -> start a fresh one
             self.clear_roi()
-        self.brush_var.set("off")              # drawing is exclusive with the brush
-        self.brush_mode = None
+        self._set_brush_mode(None)             # drawing is exclusive with the brush
         self.nb.select(0)
         self._set_draw_active(True)
         self._clear_saved_roi_outline()        # the editable selector replaces the static one
