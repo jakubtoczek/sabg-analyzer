@@ -255,6 +255,15 @@ class InfoWindow(tk.Toplevel):
                 self._show_section(i)
                 return
 
+    def _select_from_table(self, file_stem: str, scene_idx: str) -> None:
+        """Table identity-cell click -> select that section (left thumb + viewer). Matches
+        by (file, scene) since the table (sections.csv order) and the picker (scene order)
+        need not share an index."""
+        for i, e in enumerate(self.entries):
+            if e.scene.file_stem == file_stem and str(e.scene.scene_index) == scene_idx:
+                self._show_section(i)
+                return
+
     def _step(self, d: int) -> None:
         if self._picker is not None and self._picker.order:
             self._picker.step(d)              # follow the chosen list order
@@ -332,6 +341,10 @@ class InfoWindow(tk.Toplevel):
                     val = str(i) if col == "#" else (file_v if col == "file" else scene_v)
                     w = _selectable(parent, val, font=("Consolas", 8))
                     w.grid(row=i, column=c, sticky="w", padx=3)
+                    # click an identity cell -> load that section (left thumb + viewer).
+                    # (drag still selects the text for copy; this fires on press.)
+                    w.bind("<Button-1>",
+                           lambda _e, f=file_v, s=scene_v: self._select_from_table(f, s))
                 elif col == "analyze":
                     var = tk.BooleanVar(
                         value=not metadata.section_skipped({"analyze": r.get("analyze", "yes")}))

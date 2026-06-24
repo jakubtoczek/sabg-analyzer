@@ -78,10 +78,13 @@ class ScrollFrame(tk.Frame):
         self.canvas.configure(yscrollcommand=sb.set)
         self.canvas.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
-        # mousewheel only while the pointer is inside this region
+        # Wheel scrolls whichever region the pointer most recently entered. We do NOT
+        # unbind on <Leave>: this frame is full of child widgets (thumbnail buttons), and
+        # crossing onto a child fires <Leave> on the parent -> the old unbind_all killed
+        # wheel scrolling the moment the pointer was over a thumbnail. The next <Enter>
+        # rebinds, so entering another scroll region just transfers ownership.
         self.bind("<Enter>", lambda e: self.canvas.bind_all("<MouseWheel>",
                                                             self._on_wheel))
-        self.bind("<Leave>", lambda e: self.canvas.unbind_all("<MouseWheel>"))
 
     def _content_fits(self) -> bool:
         """True when the interior is no taller than the visible canvas (nothing to
@@ -114,6 +117,8 @@ class ScrollFrame(tk.Frame):
         self._schedule_scrollregion()
 
     def _on_wheel(self, event) -> None:
+        if not self.canvas.winfo_exists():  # guard: this region may be destroyed while bound
+            return
         if self._content_fits():            # don't overscroll into blank space above
             return
         self.canvas.yview_scroll(int(-event.delta / 120), "units")
