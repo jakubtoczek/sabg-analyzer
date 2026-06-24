@@ -1822,7 +1822,8 @@ class PreviewWindow(tk.Toplevel):
         """Deep-ish copy of the dataclass tree so the worker sees a stable config."""
         c = self.cfg
         return replace(
-            c, tissue=replace(c.tissue), artifact=replace(c.artifact),
+            c, tissue=replace(c.scene_tissue(self.entry.scene.key)),  # per-scene tissue override, as analyze does
+            artifact=replace(c.artifact),
             fold=replace(c.fold), edge=replace(c.edge),
             detection=replace(c.detection), threshold=replace(c.threshold),
             overlay=replace(c.overlay))

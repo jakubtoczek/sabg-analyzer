@@ -21,7 +21,7 @@ class ThresholdParams:
     percentile: float = 99.0
     value: float | None = None
     min_score: float = 0.0
-    scale: float = 0.70        # multiply the auto threshold (<1 = more sensitive).
+    scale: float = 0.70        # multiply the modeled triangle/otsu threshold (<1 = more sensitive).
     #   0.70 = session-16 tuning default (cfg07; was 0.825).
     #   With hysteresis on (detection.hysteresis) this is the SEED/high threshold:
     #   keep it fairly strict (~0.8-0.9) and let the hysteresis grow recover faint teal.
@@ -73,7 +73,9 @@ def compute_threshold(hist: ScoreHistogram, p: ThresholdParams) -> float:
         cdf = np.cumsum(counts) / counts.sum()
         idx = int(np.searchsorted(cdf, p.percentile / 100.0))
         idx = min(idx, len(centers) - 1)
-        thr = float(centers[idx])
+        # An explicit percentile is exact: `scale` only nudges the modeled
+        # triangle/otsu cut points, not a percentile the user named directly.
+        return max(float(centers[idx]), p.min_score)
     elif p.method in ("triangle", "otsu"):
         # Reconstruct a representative sample from the histogram for the
         # skimage estimators (they take an image/array, not a histogram).

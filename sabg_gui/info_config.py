@@ -406,6 +406,16 @@ class InfoWindow(tk.Toplevel):
         try:
             self.df.to_csv(self.csv_path, index=False)
             messagebox.showinfo("Saved", f"Wrote {self.csv_path}", parent=self)
+        except PermissionError:
+            alt = self.csv_path.with_name(self.csv_path.stem + "_new.csv")
+            try:
+                self.df.to_csv(alt, index=False)
+                messagebox.showwarning(
+                    "Saved to fallback",
+                    f"{self.csv_path.name} is locked (open in Excel?).\nWrote {alt.name} instead.",
+                    parent=self)
+            except Exception as exc:
+                messagebox.showerror("Save failed", str(exc), parent=self)
         except Exception as exc:
             messagebox.showerror("Save failed", str(exc), parent=self)
 
