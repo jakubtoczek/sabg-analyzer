@@ -65,6 +65,14 @@ tissue:
   fill_interior_holes: false   # reclaim faint interior tissue dropped as glass: fill enclosed holes
                                # unless they look like bright glass / uniform bg-colour / mosaic gap
   interior_hole_max_frac: 0.02 # upper guard: never fill an interior hole bigger than this frame fraction
+  # Mosaic-margin debris trim (OFF by default). The scan margin leaves thin tissue-classified
+  # junk -- lacy tile-seam fingers and small isolated specks between the tissue and the bright
+  # glass margin -- that no colour/texture rule separates from faint tissue. A morphological
+  # OPEN of this radius (overview px) drops features thinner than 2x the radius (fingers, specks,
+  # ragged rim) while the solid blob survives; only non-teal pixels are trimmed (stained tissue
+  # kept). Self-limiting: clean sections lose ~0%, only debris-heavy ones move. Tune on a real run
+  # (overview is small, ~1000-2000 px wide) and EYEBALL first; 4-6 is a sane range, >9 over-trims.
+  margin_open_px: 0            # 0 = off; morphological-open radius (overview px) for margin debris
 # Per-scene tissue overrides go under scenes.<file:idx>.tissue (see the `scenes` block).
 
 # ---- Artifact rejection (folds / debris / edge halos) ----------------------

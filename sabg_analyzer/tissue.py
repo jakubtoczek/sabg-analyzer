@@ -56,6 +56,14 @@ class TissueParams:
                                                  # its pixels are textured or teal (tissue)
     interior_hole_max_frac: float = 0.02  # upper guard: never fill a hole bigger than this
                                           # frame fraction (protects large enclosed glass)
+    # Mosaic-margin debris trim (default OFF). The scan margin keeps thin tissue-classified
+    # junk -- lacy tile-seam fingers and small isolated specks between the tissue and the
+    # bright-glass margin -- that no per-pixel colour/texture rule separates from faint
+    # tissue. They are *thin*, though, so a morphological OPEN of radius margin_open_px
+    # (overview px) drops features narrower than 2*margin_open_px while the solid blob and
+    # its rim survive (the rim loses ~margin_open_px). Only non-teal pixels are trimmed, so
+    # stained tissue is kept. Tune the radius per your overview scale (config.example.yaml).
+    margin_open_px: int = 0           # 0 = off; morphological-open radius for margin debris
 
 
 @dataclass
@@ -254,6 +262,25 @@ def _fill_interior_holes_guarded(m: np.ndarray, rgb: np.ndarray,
     return m.astype(bool)
 
 
+def _trim_margin_debris(m: np.ndarray, rgb: np.ndarray, p: TissueParams) -> np.ndarray:
+    """Drop thin, non-teal tissue-classified junk in the scan margin by a morphological open.
+
+    The lacy tile-seam fingers and small isolated specks the scan margin leaves are *thin*:
+    a morphological OPEN of radius ``margin_open_px`` erases features narrower than twice the
+    radius (the fingers, specks, and ragged rim) while the solid tissue blob survives, losing
+    only ~``margin_open_px`` off its boundary. The teal guard keeps genuinely stained tissue
+    (``opponent_score >= bg_teal_guard``) even where it is thin. A distance band off the black
+    mosaic gaps cannot reach these, because the margin here is bright glass, not black gap.
+    Overview only -- never run tile-by-tile (it would erode signal at every tile border).
+    """
+    r = int(p.margin_open_px)
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
+    opened = cv2.morphologyEx(m.astype(np.uint8), cv2.MORPH_OPEN, k).astype(bool)
+    from .scoring import opponent_score
+    stained = opponent_score(rgb) >= p.bg_teal_guard
+    return m & (opened | stained)                 # drop thin non-teal protrusions only
+
+
 def segment_tissue(rgb: np.ndarray, p: TissueParams) -> np.ndarray:
     """Full overview tissue mask: estimate background, classify, clean, with an
     anti-collapse retry (if the adaptive pass keeps almost everything, the glass
@@ -272,4 +299,6 @@ def segment_tissue(rgb: np.ndarray, p: TissueParams) -> np.ndarray:
                 use_p, use_bg = strict, bg2
     if p.fill_interior_holes:   # reclaim faint interior tissue dropped as glass
         m = _fill_interior_holes_guarded(m, rgb, use_bg, use_p)
+    if p.margin_open_px > 0:    # drop thin debris in the scan margin (opt-in)
+        m = _trim_margin_debris(m, rgb, use_p)
     return m
