@@ -73,6 +73,12 @@ tissue:
   # kept). Self-limiting: clean sections lose ~0%, only debris-heavy ones move. Tune on a real run
   # (overview is small, ~1000-2000 px wide) and EYEBALL first; 4-6 is a sane range, >9 over-trims.
   margin_open_px: 0            # 0 = off; morphological-open radius (overview px) for margin debris
+  # Tile-aware glass-margin removal (OFF by default). Beige slide glass at the scan margin reads as
+  # tissue. Using the acquired mosaic tiles (from the CZI), drop a MARGIN tile only when it is ~all
+  # glass: >= margin_glass_pure of its tissue pixels match the section's margin-glass colour and carry
+  # no teal. Mixed/tissue tiles are left whole (no tile-edge cut through tissue). Conservative -- it
+  # won't touch uniformly-pale sections where glass ~ tissue colour; use the exclusion brush there.
+  margin_glass_pure: 0.0       # 0 = off; else 0.90-0.99 (0.98 = drop tiles >=98% glass). EYEBALL first.
 # Per-scene tissue overrides go under scenes.<file:idx>.tissue (see the `scenes` block).
 
 # ---- Artifact rejection (folds / debris / edge halos) ----------------------

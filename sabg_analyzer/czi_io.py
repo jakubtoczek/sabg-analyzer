@@ -190,6 +190,31 @@ def iter_tiles(
             yield rgb, off_x, off_y, tw, th
 
 
+def acquired_tiles(scene: SceneInfo) -> list[tuple[int, int, int, int]]:
+    """Global-coord ``(x, y, w, h)`` rectangles of the acquired full-res mosaic tiles.
+
+    Read from the CZI sub-block directory via ``czifile`` (pylibCZIrw exposes no tile
+    geometry). ZEN tissue-detection scans acquire an *irregular* footprint, so the tile
+    positions live only here. Coordinates share the frame of ``scene.x/scene.y``, so a
+    caller maps a tile onto any canvas with that canvas's ``scale`` from :func:`read_overview`.
+    """
+    import czifile
+    out: list[tuple[int, int, int, int]] = []
+    with czifile.CziFile(scene.path) as czi:
+        sbs = list(czi.filtered_subblock_directory)
+        if not sbs:
+            return out
+        ax = {d: i for i, d in enumerate(sbs[0].dims)}
+        if "X" not in ax or "Y" not in ax:
+            return out
+        for s in sbs:
+            if s.is_pyramid or s.scene_index != scene.scene_index:
+                continue
+            out.append((s.start[ax["X"]], s.start[ax["Y"]],
+                        s.shape[ax["X"]], s.shape[ax["Y"]]))
+    return out
+
+
 def read_overview(
     doc, scene: SceneInfo, max_edge: int | None = None, zoom_cap: float = 1.0,
     um_per_px: float | None = None,

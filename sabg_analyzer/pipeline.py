@@ -131,6 +131,17 @@ def _overview_block(off, extent, scale, limit):
     return a, b
 
 
+def _tile_boxes_px(tiles_global, scene, sc, W, H):
+    """Map global acquired-tile rects to canvas-pixel boxes (ox, oy, ex, ey), clipped."""
+    out = []
+    for X, Y, w, h in tiles_global:
+        ox = max(0, int(round((X - scene.x) * sc))); oy = max(0, int(round((Y - scene.y) * sc)))
+        ex = min(W, int(round((X + w - scene.x) * sc))); ey = min(H, int(round((Y + h - scene.y) * sc)))
+        if ex > ox and ey > oy:
+            out.append((ox, oy, ex, ey))
+    return out
+
+
 def _project(canvas, mask, off_x, off_y, tw, th, scale):
     """OR a full-res tile *mask* onto an overview *canvas* at *scale*."""
     h, w = canvas.shape
@@ -181,10 +192,16 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
     ov_rgb, scale = czi_io.read_overview(
         doc, scene, max_edge=cfg.overview_max_edge, zoom_cap=z,
         um_per_px=cfg.overview_um_per_px)
-    from .tissue import artifact_mask, erode_mask, segment_tissue
+    from .tissue import (artifact_mask, drop_glass_margin_tiles, erode_mask,
+                         segment_tissue)
     tcfg = cfg.scene_tissue(scene.key)   # tissue params (+ any per-scene overrides)
     ov_tissue = segment_tissue(ov_rgb, tcfg)
     H, W = ov_tissue.shape
+    # Tile-aware glass-margin removal (opt-in): drop acquired margin tiles that are ~all glass.
+    glass_tiles = czi_io.acquired_tiles(scene) if tcfg.margin_glass_pure > 0 else None
+    if glass_tiles:
+        ov_tissue = drop_glass_margin_tiles(
+            ov_tissue, ov_rgb, _tile_boxes_px(glass_tiles, scene, scale, W, H), tcfg)
     # border erosion (edge halos) on the *counting* region only.
     ov_tissue_count = (erode_mask(ov_tissue, cfg.artifact.erode_px)
                        if cfg.artifact.enabled else ov_tissue)
@@ -312,6 +329,9 @@ def analyze_scene(doc, scene: SceneInfo, cfg: Config, out_dir: Path,
     # confident seed; pass 2 uses this only to gate faint full-res positives. Full-res
     # seeds are always counted, so the HD mean-pool never loses punctate signal.
     hd_tissue = segment_tissue(hd_rgb, tcfg)   # computed here, reused for the maps below
+    if glass_tiles:                            # same tile-glass removal on the HD canvas
+        hd_tissue = drop_glass_margin_tiles(
+            hd_tissue, hd_rgb, _tile_boxes_px(glass_tiles, scene, hd_scale, Wh, Hh), tcfg)
     hd_excl = None
     if excl is not None:                        # same exclusion on the maps/HD canvas
         hd_excl = cv2.resize(excl.astype(np.uint8), (Wh, Hh),

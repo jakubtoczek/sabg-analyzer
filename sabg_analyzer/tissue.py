@@ -64,6 +64,13 @@ class TissueParams:
     # its rim survive (the rim loses ~margin_open_px). Only non-teal pixels are trimmed, so
     # stained tissue is kept. Tune the radius per your overview scale (config.example.yaml).
     margin_open_px: int = 0           # 0 = off; morphological-open radius for margin debris
+    # Tile-aware glass-margin removal (default OFF). Beige slide glass at the scan margin is
+    # classified as tissue (estimate_background locks onto the brighter glass). Using the
+    # acquired mosaic tiles (czi_io.acquired_tiles), drop a MARGIN tile only when it is ~all
+    # glass -- >= margin_glass_pure of its tissue pixels match the section's margin-glass colour
+    # and carry no teal. Mixed/tissue tiles are left whole, so the tile-edge cut never runs
+    # through real tissue (conservative; uniformly-pale sections need the manual exclusion brush).
+    margin_glass_pure: float = 0.0    # 0 = off; else drop margin tiles >= this fraction glass (e.g. 0.98)
 
 
 @dataclass
@@ -279,6 +286,53 @@ def _trim_margin_debris(m: np.ndarray, rgb: np.ndarray, p: TissueParams) -> np.n
     from .scoring import opponent_score
     stained = opponent_score(rgb) >= p.bg_teal_guard
     return m & (opened | stained)                 # drop thin non-teal protrusions only
+
+
+def drop_glass_margin_tiles(mask: np.ndarray, rgb: np.ndarray,
+                            tile_boxes: list[tuple[int, int, int, int]],
+                            p: TissueParams) -> np.ndarray:
+    """Conservative tile-aware glass-margin removal (overview/HD canvases only).
+
+    *tile_boxes* are the acquired mosaic tiles in this mask's pixel coords (the caller maps
+    :func:`czi_io.acquired_tiles` through the canvas scale). A glass-colour reference is taken
+    from the *margin* tiles (those touching the un-acquired exterior), since beige slide glass
+    fools :func:`estimate_background`. A margin tile is dropped only when it is **~entirely
+    glass** -- at least ``margin_glass_pure`` of its tissue pixels lie within ``bg_margin`` of
+    that reference and carry no teal. Mixed/tissue tiles are kept whole, so a tile-edge cut
+    never runs through real tissue. Uniformly-pale sections (glass ~ tissue colour) are left to
+    the manual exclusion brush.
+    """
+    if p.margin_glass_pure <= 0 or not tile_boxes:
+        return mask
+    H, W = mask.shape
+    inv = (~mask).astype(np.uint8)                 # exterior = un-acquired padding/gaps
+    ff = inv.copy(); ffm = np.zeros((H + 2, W + 2), np.uint8)
+    cv2.floodFill(ff, ffm, (0, 0), 2)
+    extd = cv2.dilate((ff == 2).astype(np.uint8), np.ones((9, 9), np.uint8)).astype(bool)
+    from .scoring import opponent_score
+    opp = opponent_score(rgb)
+    a = rgb.astype(np.float32) / 255.0
+    margin, samp = [], []
+    for ox, oy, ex, ey in tile_boxes:
+        if not extd[oy:ey, ox:ex].any():
+            continue                               # interior tile: never touched
+        margin.append((ox, oy, ex, ey))
+        cell = mask[oy:ey, ox:ex] & (opp[oy:ey, ox:ex] < p.bg_teal_guard)
+        if cell.any():
+            samp.append(a[oy:ey, ox:ex][cell])
+    if not samp:
+        return mask
+    glass = np.median(np.concatenate(samp), axis=0)
+    dist = np.sqrt(((a - glass.reshape(1, 1, 3)) ** 2).sum(axis=2))
+    drop = np.zeros((H, W), bool)
+    for ox, oy, ex, ey in margin:
+        cell = mask[oy:ey, ox:ex]
+        if cell.sum() < 0.2 * cell.size:           # tile barely tissue-classified: skip
+            continue
+        glassy = (dist[oy:ey, ox:ex] < p.bg_margin) & (opp[oy:ey, ox:ex] < p.bg_teal_guard)
+        if float(glassy[cell].mean()) >= p.margin_glass_pure:   # ~all glass -> drop whole tile
+            drop[oy:ey, ox:ex] |= cell
+    return mask & ~drop
 
 
 def segment_tissue(rgb: np.ndarray, p: TissueParams) -> np.ndarray:
