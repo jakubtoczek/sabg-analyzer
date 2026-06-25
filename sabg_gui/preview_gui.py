@@ -39,10 +39,11 @@ from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 
 from . import widgets as gw
 from .widgets import CanvasNav              # shared mouse-only canvas navigation
-from sabg_analyzer import export, overlay, preview, whitebalance
+from sabg_analyzer import czi_io, export, overlay, preview, whitebalance
 from sabg_analyzer.config import load_config
 
 _VIEW_MULTS = [1, 2, 4, 8]          # thumb-resolution multipliers for the px/µm picker
+_SPINNER = "◜◠◝◞◡◟"                  # rotating-arc frames for the Recompute "computing…" spinner
 # Scale-bar corner labels (clear) -> the export.draw_scalebar position codes.
 _SB_POS = {"bottom-right": "br", "bottom-left": "bl",
            "top-right": "tr", "top-left": "tl"}
@@ -151,6 +152,9 @@ class PreviewWindow(tk.Toplevel):
         self.wb_neutralize.trace_add("write", lambda *_: self._on_wb_neutralize())
         self.show_vars: dict[str, tk.BooleanVar] = {}
         self.field_vars: dict[tuple[str, str], tk.Variable] = {}
+        self._scene_tiles: dict[str, list] = {}            # cached acquired-tile rects per scene.key
+        self.show_tile_grid = tk.BooleanVar(value=False)   # diagnostic mosaic-tile-grid overlay
+        self._tile_grid_artist = None                      # PatchCollection of tile rects (thumbnail)
         self._photo_refs: list[tk.PhotoImage] = []         # keep picker thumbs alive
         self._sections: list | None = None                 # cached SectionEntry objs (stable identity)
         # per-section memory (keyed by scene.key): the pending ROI rectangle and the
@@ -159,6 +163,9 @@ class PreviewWindow(tk.Toplevel):
         self.order_mode = tk.StringVar(value=gw.SECTION_ORDER_MODES[0])
         self._picker = None                                # picker handle (marker + arrow nav)
         self._dirty = False
+        self._dirty_since_submit = False                   # params changed since the running compute began
+        self._spin_job = None                              # Recompute spinner after-timer
+        self._spin_i = 0
         self._params_dirty = False                         # tuning changed since last 'Export → config'
         self._excl_dirty = False                           # exclusion painted/cleared but not 'Save excl'-ed
         self._reflecting = False                           # suppress recompute while
@@ -178,6 +185,7 @@ class PreviewWindow(tk.Toplevel):
         for _v in (self.sb_pos, self.sb_len, self.sb_label, self.sb_live):
             _v.trace_add("write", lambda *_: self._refresh_live_scalebar_all())
         self._build_layout()
+        self._refresh_recompute_btn()          # initial button state (no ROI yet -> greyed)
         self._update_pick_state()              # 'pick white' starts greyed (WB off by default)
         self._populate_picker()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -268,7 +276,7 @@ class PreviewWindow(tk.Toplevel):
         tk.Label(roi_strip, text="µm").pack(side="left", padx=(1, 0))
         btn_set = tk.Button(roi_strip, text="Set", command=self._set_roi_from_fields)
         btn_set.pack(side="left", padx=(6, 2))
-        self.roi_px_lbl = tk.Label(roi_strip, text="", fg="#557", font=("Segoe UI", 8))
+        self.roi_px_lbl = gw.selectable(roi_strip, "", fg="#557", font=("Segoe UI", 8))
         self.roi_px_lbl.pack(side="left", padx=(4, 0))
         for _w in (e_cx, e_cy, e_w, e_h):
             _w.bind("<Return>", lambda _e: self._set_roi_from_fields())
@@ -279,7 +287,7 @@ class PreviewWindow(tk.Toplevel):
         labels = self._res_labels()
         ttk.OptionMenu(row1, self.view_res, labels[0], *labels,
                        command=lambda _v: self._reload_display(preserve_view=True)).pack(side="left")
-        self.res_label = tk.Label(row1, text="loaded: —", fg="#557", font=("Segoe UI", 8))
+        self.res_label = gw.selectable(row1, "loaded: —", fg="#557", font=("Segoe UI", 8))
         self.res_label.pack(side="left", padx=(6, 0))
 
         # row 2: shared view tools + the exclusion-brush toggle (strips open below barwrap)
@@ -347,6 +355,10 @@ class PreviewWindow(tk.Toplevel):
         bar = tk.Frame(tab)
         bar.pack(fill="x")
         tk.Button(bar, text="Close ROI", command=self.clear_roi).pack(side="left", padx=2, pady=2)
+        # copyable ROI geometry (centre/size in µm + px + µm/px); select text then Ctrl+C.
+        info_strip = self._collapsible_strip(bar, tab, "ℹ info", after_widget=bar)
+        self.roi_info_lbl = gw.selectable(info_strip, "—", font=("Consolas", 8), fg="#446")
+        self.roi_info_lbl.pack(side="left", padx=(6, 2))
         self._add_shared_tools(bar, "roi")
 
         self.roi_fig = Figure(figsize=(6, 6), tight_layout=True)
@@ -459,8 +471,9 @@ class PreviewWindow(tk.Toplevel):
         gw.Tooltip(btn_clear, "Clear the picked white area and revert to auto.")
         self._tone_row(wbs, "temp", self.tone_temp, -10.0, 10.0,
                        tip="Warm/cool nudge of the white point (display only). ZEN ±1 ≈ ±10 K.")
-        # tone curve in a collapsed strip (rarely changed; default no-op)
-        tn = self._collapsible_strip(bar, strip_parent, "🎨 tone",
+        # display-only controls in one collapsed strip: tone curve (figures only) + the
+        # diagnostic mosaic tile-grid overlay. Rarely changed; tone defaults to a no-op.
+        tn = self._collapsible_strip(bar, strip_parent, "🎚 display",
                                      after_widget=after_widget)
         self._tone_row(tn, "bright", self.tone_brightness, -1.0, 1.0,
                        tip="Display brightness (figures only); reset returns to a no-op.")
@@ -469,6 +482,11 @@ class PreviewWindow(tk.Toplevel):
         self._tone_row(tn, "gamma", self.tone_gamma, 0.2, 3.0,
                        tip="Display gamma (figures only); 1.0 is a no-op, >1 brightens mid-tones.")
         tk.Button(tn, text="reset", command=self._reset_tone).pack(side="left", padx=(8, 2))
+        cb_grid = tk.Checkbutton(tn, text="tile grid", variable=self.show_tile_grid,
+                                 command=self._toggle_tile_grid)
+        cb_grid.pack(side="left", padx=(12, 2))
+        gw.Tooltip(cb_grid, "Outline the acquired mosaic tiles on the Thumbnail (diagnostic). "
+                            "The tile-edge crop / glass-tile removal act on these tiles.")
         # scale-bar controls live in a collapsed strip (rarely changed)
         sb = self._collapsible_strip(bar, strip_parent, "⚖ scale bar",
                                      after_widget=after_widget)
@@ -930,23 +948,24 @@ class PreviewWindow(tk.Toplevel):
         self._update_result_provenance()
 
     def _update_result_provenance(self) -> None:
-        """Refresh the Result provenance line; amber when the view has moved on."""
+        """Refresh the Result provenance line (copy-selectable); amber when the view moved on."""
         if not hasattr(self, "result_meta"):
             return
         if self._result_alias is None:
-            self.result_meta.configure(text="(no result yet)", fg="#888")
+            gw.set_selectable(self.result_meta, "(no result yet)")
+            self.result_meta.configure(fg="#888")
             return
         src = self._roi_desc(self._result_roi) if self._result_scope == "ROI" else "whole section"
         cur_alias = self.entry.alias if self.entry else None
         stale = (cur_alias != self._result_alias) or (
             self._result_scope == "ROI" and self.roi_rect != self._result_roi)
         if stale:
-            self.result_meta.configure(
-                text=f"◑ result: {self._result_alias} · {src} — view changed (recompute)",
-                fg="#c8862a")
+            gw.set_selectable(self.result_meta,
+                              f"◑ result: {self._result_alias} · {src} — view changed (recompute)")
+            self.result_meta.configure(fg="#c8862a")
         else:
-            self.result_meta.configure(
-                text=f"● showing {self._result_alias} · {src}", fg="#3a7d44")
+            gw.set_selectable(self.result_meta, f"● showing {self._result_alias} · {src}")
+            self.result_meta.configure(fg="#3a7d44")
 
     # -- manual exclusion brush --------------------------------------------
     def _excl_path(self) -> Path | None:
@@ -1270,8 +1289,7 @@ class PreviewWindow(tk.Toplevel):
         self.stats_label.pack(fill="x")
         # provenance / staleness line: which section + ROI this result came from, and
         # whether the current view has moved on since (the Result can lag the view).
-        self.result_meta = tk.Label(res, text="(no result yet)", anchor="w", justify="left",
-                                    font=("Segoe UI", 8), fg="#888")
+        self.result_meta = gw.selectable(res, "(no result yet)", font=("Segoe UI", 8), fg="#888")
         self.result_meta.pack(fill="x")
 
         # Detection parameters FIRST (above the layers panel), in a bordered panel matching
@@ -1417,6 +1435,7 @@ class PreviewWindow(tk.Toplevel):
         self._excl_rgba = None                   # rebuilt by _refresh_excl_overlay below
         self._brush_cursor = None                # patch removed with the axes clear
         self._saved_roi_artist = None            # remembered-ROI outline (redrawn below)
+        self._tile_grid_artist = None            # tile-grid overlay cleared with the axes
         self._sb_live_artist["thumb"] = None     # live scale bar cleared with the axes
         self.thumb_ax.set_axis_off()
         self._disp_artist = self.thumb_ax.imshow(
@@ -1439,11 +1458,11 @@ class PreviewWindow(tk.Toplevel):
         mb = rgb.nbytes / 1e6                  # actual RAM of the loaded display image
         if sc.pixel_size_um and rgb.shape[1]:
             self._loaded_um = sc.pixel_size_um * sc.w / rgb.shape[1]
-            self.res_label.configure(
-                text=f"loaded: {self._loaded_um:.3g} µm/px  (~{mb:.0f} MB)")
+            gw.set_selectable(
+                self.res_label, f"loaded: {self._loaded_um:.3g} µm/px  (~{mb:.0f} MB)")
         else:
             self._loaded_um = None
-            self.res_label.configure(text=f"loaded: —  (~{mb:.0f} MB)")
+            gw.set_selectable(self.res_label, f"loaded: —  (~{mb:.0f} MB)")
         # Hide the ROI selector's drawn rectangle unless it's actively being edited, so a
         # rectangle drawn on one thumb doesn't leak onto another (set_active(False) only stops
         # event handling — it never hides the rectangle; mirrors the set_visible(True) in
@@ -1462,6 +1481,7 @@ class PreviewWindow(tk.Toplevel):
         self._update_excl_buttons()
         self._update_roi_buttons()             # a remembered rect re-enables Open/Clear ROI
         self._refresh_live_scalebar("thumb")   # redraw the live bar over the fresh image
+        self._draw_tile_grid()                 # redraw the mosaic-tile-grid overlay if toggled on
         if self.roi_rgb is None:
             if self.roi_rect is not None:
                 self.status.configure(
@@ -1589,6 +1609,41 @@ class PreviewWindow(tk.Toplevel):
                 pass
             self._saved_roi_artist = None
 
+    # -- mosaic tile-grid diagnostic overlay (thumbnail) -------------------
+    def _toggle_tile_grid(self) -> None:
+        self._draw_tile_grid() if self.show_tile_grid.get() else self._clear_tile_grid()
+
+    def _clear_tile_grid(self) -> None:
+        if self._tile_grid_artist is not None:
+            try:
+                self._tile_grid_artist.remove()
+            except Exception:
+                pass
+            self._tile_grid_artist = None
+            if hasattr(self, "thumb_canvas"):
+                self.thumb_canvas.draw_idle()
+
+    def _draw_tile_grid(self) -> None:
+        """Outline the acquired mosaic tiles on the thumbnail (diagnostic; off by default).
+        Drawn in display-pixel data coords, so it tracks zoom/pan like the other annotations."""
+        self._clear_tile_grid()
+        if (not self.show_tile_grid.get() or self.disp_rgb is None or self.entry is None):
+            return
+        sc = self.entry.scene
+        if not sc.w:
+            return
+        tiles = self._acquired_tiles(sc)
+        if not tiles:
+            return
+        from matplotlib.collections import PatchCollection
+        s = self.disp_rgb.shape[1] / sc.w          # display px per full-res px
+        rects = [Rectangle(((X - sc.x) * s, (Y - sc.y) * s), w * s, h * s)
+                 for X, Y, w, h in tiles]
+        pc = PatchCollection(rects, facecolor="none", edgecolor="#00b3ff",
+                             linewidths=0.4, alpha=0.7, zorder=8)
+        self._tile_grid_artist = self.thumb_ax.add_collection(pc)
+        self.thumb_canvas.draw_idle()
+
     def _on_rect(self, eclick, erelease) -> None:
         if self._setting_extents or self.entry is None or self.disp_rgb is None:
             return
@@ -1631,9 +1686,26 @@ class PreviewWindow(tk.Toplevel):
             self.roi_cy_var.set(f"{(y + hh / 2) * px:.0f}")
             self.roi_w_var.set(f"{ww * px:.0f}")
             self.roi_h_var.set(f"{hh * px:.0f}")
-            self.roi_px_lbl.configure(text=f"= {ww}×{hh} px @ {px:.3g} µm/px")
+            gw.set_selectable(self.roi_px_lbl, f"= {ww}×{hh} px @ {px:.3g} µm/px")
         else:
-            self.roi_px_lbl.configure(text=f"= {ww}×{hh} px (no µm scale)")
+            gw.set_selectable(self.roi_px_lbl, f"= {ww}×{hh} px (no µm scale)")
+
+    def _update_roi_info(self) -> None:
+        """Fill the ROI-tab 'info' line (copy-selectable) with the open ROI's geometry."""
+        if not hasattr(self, "roi_info_lbl"):
+            return
+        if self.roi_rect is None or self.roi_px_um is None:
+            gw.set_selectable(self.roi_info_lbl, "—")
+            return
+        x, y, ww, hh = self.roi_rect
+        px = self.entry.scene.pixel_size_um if self.entry else None
+        if px:
+            cx, cy = (x + ww / 2) * px, (y + hh / 2) * px
+            txt = (f"center x={cx:.0f} y={cy:.0f} µm  |  size {ww * px:.0f}×{hh * px:.0f} µm "
+                   f"= {ww}×{hh} px @ {self.roi_px_um:.3g} µm/px")
+        else:
+            txt = f"size {ww}×{hh} px @ {self.roi_px_um:.3g} µm/px"
+        gw.set_selectable(self.roi_info_lbl, txt)
 
     def _set_roi_from_fields(self) -> None:
         """Apply the typed centre+size (µm) as the pending ROI rectangle — exact and
@@ -1767,21 +1839,66 @@ class PreviewWindow(tk.Toplevel):
         """Auto on (default): debounced auto-recompute, Recompute button disabled. Auto
         off: edits just mark dirty; the user presses Recompute. Re-enabling auto while
         dirty catches up immediately."""
-        auto = self.auto_recompute.get()
-        self.btn_recompute.configure(state="disabled" if auto else "normal")
-        if auto and self._dirty:
+        if self.auto_recompute.get() and self._dirty and not self._busy:
             self._schedule_recompute()
+        self._refresh_recompute_btn()
 
     def _mark_dirty(self) -> None:
         self._dirty = True
         self._params_dirty = True            # a config-affecting change is now pending export
-        self.dirty_dot.configure(text="● changed", fg="#c8862a")
-        self.btn_recompute.configure(bg="#c8862a", activebackground="#a86f22")
+        if self._busy:                       # changed mid-compute -> the result will be stale
+            self._dirty_since_submit = True
+        self._refresh_recompute_btn()
 
     def _clear_dirty(self) -> None:
         self._dirty = False
-        self.dirty_dot.configure(text="✓ up to date", fg="#3a7d44")
-        self.btn_recompute.configure(bg="#3a7d44", activebackground="#2f6638")
+        self._refresh_recompute_btn()
+
+    # -- Recompute button state machine + spinner --------------------------
+    def _refresh_recompute_btn(self) -> None:
+        """Reflect (busy / dirty / auto / ROI-present) in the button + status label.
+        busy: greyed, disabled, spinning. dirty: orange (enabled in manual). clean: green,
+        disabled. no ROI: greyed, disabled."""
+        if self._busy:
+            self._start_spin()
+            self.btn_recompute.configure(state="disabled", bg="#9aa0a6",
+                                         activebackground="#9aa0a6", fg="white")
+            self.dirty_dot.configure(text="computing…", fg="#557")
+            return
+        self._stop_spin()
+        self.btn_recompute.configure(text="↻  Recompute", fg="white")
+        if self.roi_rgb is None:                       # nothing to compute
+            self.btn_recompute.configure(state="disabled", bg="#9aa0a6",
+                                         activebackground="#9aa0a6")
+            self.dirty_dot.configure(text="(open an ROI)", fg="#888")
+        elif self._dirty:
+            self.btn_recompute.configure(
+                bg="#c8862a", activebackground="#a86f22",
+                state="disabled" if self.auto_recompute.get() else "normal")
+            self.dirty_dot.configure(text="● changed", fg="#c8862a")
+        else:
+            self.btn_recompute.configure(bg="#3a7d44", activebackground="#2f6638",
+                                         state="disabled")
+            self.dirty_dot.configure(text="✓ up to date", fg="#3a7d44")
+
+    def _start_spin(self) -> None:
+        if self._spin_job is None:
+            self._spin_i = 0
+            self._spin()
+
+    def _spin(self) -> None:
+        if not self._busy:
+            self._spin_job = None
+            return
+        frame = _SPINNER[self._spin_i % len(_SPINNER)]
+        self._spin_i += 1
+        self.btn_recompute.configure(text=f"{frame}  computing…")
+        self._spin_job = self.after(110, self._spin)
+
+    def _stop_spin(self) -> None:
+        if self._spin_job is not None:
+            self.after_cancel(self._spin_job)
+            self._spin_job = None
 
     def _on_manual_seed_edit(self) -> None:
         """Manual-seed entry changed → recompute (unless we're reflecting the auto
@@ -1800,9 +1917,43 @@ class PreviewWindow(tk.Toplevel):
             self.after_cancel(self._recompute_job)
         self._recompute_job = self.after(250, self.request_recompute)
 
+    def _acquired_tiles(self, scene) -> list:
+        """Acquired mosaic-tile rects for *scene* (global coords), cached per scene."""
+        key = scene.key
+        if key not in self._scene_tiles:
+            try:
+                self._scene_tiles[key] = czi_io.acquired_tiles(scene)
+            except Exception:
+                self._scene_tiles[key] = []      # tile geometry unavailable: skip tile-margin
+        return self._scene_tiles[key]
+
+    def _roi_tile_boxes(self, tcfg, rgb) -> list | None:
+        """Acquired tiles mapped into the analysis (expanded-ROI) crop's pixel frame, or None.
+
+        The crop is read at full res (zoom 1.0) with global origin (ex, ey) recoverable from
+        roi_rect minus the inset, so tile (X,Y,W,H) -> (X-ex, Y-ey, ...). Only computed when a
+        tile-margin step is active, so the default-off case never reads the sub-block directory."""
+        if (tcfg.margin_crop_px <= 0 and tcfg.margin_glass_pure <= 0) or self.entry is None \
+                or self.roi_rect is None or self._roi_inset is None:
+            return None
+        tiles = self._acquired_tiles(self.entry.scene)
+        if not tiles:
+            return None
+        ex = self.roi_rect[0] - self._roi_inset[0]
+        ey = self.roi_rect[1] - self._roi_inset[1]
+        H, W = rgb.shape[:2]
+        out = []
+        for X, Y, w, h in tiles:
+            ox = max(0, X - ex); oy = max(0, Y - ey)
+            bx = min(W, X + w - ex); by = min(H, Y + h - ey)
+            if bx > ox and by > oy:
+                out.append((ox, oy, bx, by))
+        return out or None
+
     def request_recompute(self) -> None:
         self._recompute_job = None
         if self.roi_rgb is None:
+            self._refresh_recompute_btn()        # nothing to compute: settle button state
             return
         manual = None
         if not self.manual_auto.get():
@@ -1815,7 +1966,9 @@ class PreviewWindow(tk.Toplevel):
         # Analyse the margin-expanded crop (edge-safe), then crop layers back to the ROI.
         rgb = self._roi_expanded if self._roi_expanded is not None else self.roi_rgb
         inset = self._roi_inset or (0, 0, self.roi_rgb.shape[1], self.roi_rgb.shape[0])
-        self._submit(self._compute, rgb, cfg_snap, self.roi_px_um, manual, excl, inset,
+        tiles = self._roi_tile_boxes(cfg_snap.tissue, rgb)
+        self._dirty_since_submit = False        # track edits made while this compute runs
+        self._submit(self._compute, rgb, cfg_snap, self.roi_px_um, manual, excl, inset, tiles,
                      tag="layers")
 
     def _snapshot_cfg(self):
@@ -1828,14 +1981,14 @@ class PreviewWindow(tk.Toplevel):
             detection=replace(c.detection), threshold=replace(c.threshold),
             overlay=replace(c.overlay))
 
-    def _compute(self, rgb, cfg, px_um, manual, exclude, inset):
+    def _compute(self, rgb, cfg, px_um, manual, exclude, inset, tiles=None):
         ox, oy, w, h = inset
         if exclude is not None and (ox or oy or exclude.shape != rgb.shape[:2]):
             padded = np.zeros(rgb.shape[:2], bool)     # the ROI exclusion, placed in the margin crop
             padded[oy:oy + h, ox:ox + w] = exclude
             exclude = padded
         layers = preview.compute_roi_layers(rgb, cfg, px_um, manual_thr=manual,
-                                            exclude=exclude)
+                                            exclude=exclude, tiles=tiles)
         # crop every 2-D mask back to the ROI (margin was analysis context only); scalars pass through
         out = {k: (v[oy:oy + h, ox:ox + w] if isinstance(v, np.ndarray) and v.ndim >= 2 else v)
                for k, v in layers.items()}
@@ -1854,6 +2007,7 @@ class PreviewWindow(tk.Toplevel):
             return
         self._busy = True
         self.status.configure(text="working…")
+        self._refresh_recompute_btn()        # greyed + spinner while the worker runs
 
         def run():
             try:
@@ -1872,6 +2026,7 @@ class PreviewWindow(tk.Toplevel):
                         text=f"computing whole section… {item[1]:.0f}%")
                     continue
                 self._busy = False
+                self._refresh_recompute_btn()       # busy ended -> settle button/spinner
                 if kind == "section":
                     row, px_um = item[1], item[2]
                     self._show_section_stats(row, px_um)
@@ -1909,7 +2064,9 @@ class PreviewWindow(tk.Toplevel):
         lay = self.layers
         if lay is None:
             return
-        self._clear_dirty()
+        # Result is fresh unless params changed while this compute ran (then it's already stale).
+        self._dirty = self._dirty_since_submit
+        self._refresh_recompute_btn()
         if self.manual_auto.get():          # reflect the auto threshold back (no recompute)
             self._reflecting = True         # the manual_thr trace must not re-mark dirty
             try:
@@ -1923,6 +2080,7 @@ class PreviewWindow(tk.Toplevel):
                  f"tissue={100*t.mean():.1f}%  fold={100*lay['fold'].mean():.1f}%")
         self._show_stats(lay, self.roi_px_um, scope="ROI")
         self._record_result_provenance("ROI")
+        self._update_roi_info()
         self._redraw()
 
     def _show_stats(self, lay: dict, px_um: float | None, scope: str = "ROI") -> None:

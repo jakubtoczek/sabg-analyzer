@@ -36,7 +36,7 @@ from .masks import _primary_secondary, compute_region_masks, detect_sabg
 from .metadata import build_aliases, load_metadata, section_skipped
 from .pipeline import _build_config_snapshot, _score_ranges
 from .threshold import ScoreHistogram, compute_threshold
-from .tissue import erode_mask, segment_tissue
+from .tissue import apply_tile_margin, erode_mask, segment_tissue
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +192,8 @@ def _roi_fold_band(rgb: np.ndarray, region: np.ndarray,
 
 def compute_roi_layers(rgb: np.ndarray, cfg: Config, pixel_size_um: float | None,
                        manual_thr: float | None = None,
-                       exclude: np.ndarray | None = None) -> dict:
+                       exclude: np.ndarray | None = None,
+                       tiles: list[tuple[int, int, int, int]] | None = None) -> dict:
     """Compute every overlay layer for one full-res RGB ROI.
 
     Returns a dict of boolean masks (all the same H×W as *rgb*) plus the thresholds:
@@ -206,9 +207,16 @@ def compute_roi_layers(rgb: np.ndarray, cfg: Config, pixel_size_um: float | None
     *exclude* is the manual exclusion mask (bool, same H×W as *rgb*, already cropped
     to the ROI); the marked region is dropped from the tissue region up front, so it
     leaves both the numerator and the denominator exactly as the pipeline does.
+
+    *tiles* are the acquired mosaic-tile rects mapped into *rgb*'s pixel frame (the GUI
+    maps :func:`czi_io.acquired_tiles` through the ROI-crop scale). When given, the tile-edge
+    crop / glass-tile removal run here exactly as the pipeline does, so a margin ROI previews
+    them live; ``edge_is_exterior=False`` so the arbitrary crop borders are never trimmed.
     """
     tcfg = cfg.tissue
     region_full = segment_tissue(rgb, tcfg)        # tissue before manual exclusion
+    if tiles:
+        region_full = apply_tile_margin(region_full, rgb, tiles, tcfg, edge_is_exterior=False)
     region = region_full & ~exclude if exclude is not None else region_full
     conv = _roi_conv(rgb, cfg, region)
     region_c_base = (erode_mask(region, cfg.artifact.erode_px)

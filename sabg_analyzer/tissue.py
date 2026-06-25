@@ -71,6 +71,12 @@ class TissueParams:
     # and carry no teal. Mixed/tissue tiles are left whole, so the tile-edge cut never runs
     # through real tissue (conservative; uniformly-pale sections need the manual exclusion brush).
     margin_glass_pure: float = 0.0    # 0 = off; else drop margin tiles >= this fraction glass (e.g. 0.98)
+    # Tile-edge crop (default ON). Trim margin_crop_px (overview px) off the OUTER sides of the
+    # acquired mosaic tiles -- the sides of the scanned footprint not shared with a neighbour tile
+    # -- adding that boundary band to non-tissue. Content-free + robust: the section borders are of
+    # low interest and the inner tissue blob is untouched (interior tile seams are shared, so kept).
+    # Needs the acquired-tile rects (czi_io.acquired_tiles); overview/HD/ROI canvases only.
+    margin_crop_px: int = 20          # 0 = off; trim this band off the scanned-footprint outer edge
 
 
 @dataclass
@@ -333,6 +339,48 @@ def drop_glass_margin_tiles(mask: np.ndarray, rgb: np.ndarray,
         if float(glassy[cell].mean()) >= p.margin_glass_pure:   # ~all glass -> drop whole tile
             drop[oy:ey, ox:ex] |= cell
     return mask & ~drop
+
+
+def _crop_footprint_edges(mask: np.ndarray, tile_boxes: list[tuple[int, int, int, int]],
+                          x: int, edge_is_exterior: bool) -> np.ndarray:
+    """Trim *x* px off the OUTER sides of the acquired mosaic footprint -> non-tissue.
+
+    The footprint = union of the acquired *tile_boxes* (in this mask's px). Eroding that union
+    by *x* and dropping the eroded band trims exactly the outer (un-shared) tile sides: interior
+    tile seams are inside the union, so they survive. ``edge_is_exterior`` controls the array
+    border: True (whole-scene ov/HD canvas, whose edges are the real footprint extent) erodes the
+    border too -> the outermost ring is trimmed; False (a Preview crop, whose edges are arbitrary
+    cuts) treats the border as footprint -> a straight cut through solid tissue is not trimmed.
+    """
+    if x <= 0 or not tile_boxes:
+        return mask
+    H, W = mask.shape
+    fp = np.zeros((H, W), np.uint8)
+    for ox, oy, ex, ey in tile_boxes:
+        fp[oy:ey, ox:ex] = 1
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * x + 1, 2 * x + 1))
+    border = cv2.BORDER_CONSTANT
+    eroded = cv2.erode(fp, k, borderType=border, borderValue=(0 if edge_is_exterior else 1))
+    band = (fp == 1) & (eroded == 0)               # the outer boundary band
+    return mask & ~band
+
+
+def apply_tile_margin(mask: np.ndarray, rgb: np.ndarray,
+                      tile_boxes: list[tuple[int, int, int, int]],
+                      p: TissueParams, edge_is_exterior: bool = True) -> np.ndarray:
+    """Apply the tile-geometry margin steps to a tissue *mask* (shared by pipeline + preview).
+
+    1. ``margin_crop_px`` (default ON): trim the scanned-footprint outer edge (:func:`_crop_footprint_edges`).
+    2. ``margin_glass_pure`` (opt-in): drop ~all-glass margin tiles (:func:`drop_glass_margin_tiles`).
+    *tile_boxes* are the acquired tiles already mapped into *mask*'s pixel frame; empty/None = no-op.
+    """
+    if not tile_boxes:
+        return mask
+    if p.margin_crop_px > 0:
+        mask = _crop_footprint_edges(mask, tile_boxes, int(p.margin_crop_px), edge_is_exterior)
+    if p.margin_glass_pure > 0:
+        mask = drop_glass_margin_tiles(mask, rgb, tile_boxes, p)
+    return mask
 
 
 def segment_tissue(rgb: np.ndarray, p: TissueParams) -> np.ndarray:

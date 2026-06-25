@@ -54,6 +54,28 @@ class Tooltip:
             self._tip = None
 
 
+def selectable(parent, text: str = "", **kw) -> tk.Entry:
+    """A read-only Entry styled to read like a Label but with copy-selectable text.
+
+    Flat, borderless and background-matched to *parent* so it looks like a label; the width
+    tracks the content so it lays out like one. Selection + Ctrl+C work natively. Update via
+    :func:`set_selectable`. Shared so Preview and the Info window copy identically."""
+    e = tk.Entry(parent, relief="flat", borderwidth=0, highlightthickness=0,
+                 readonlybackground=parent.cget("background"),
+                 width=max(1, len(text)), **kw)
+    e.insert(0, text)
+    e.configure(state="readonly")
+    return e
+
+
+def set_selectable(entry: tk.Entry, text: str) -> None:
+    """Replace the text of a :func:`selectable` read-only Entry and resize it to fit."""
+    entry.configure(state="normal")
+    entry.delete(0, "end")
+    entry.insert(0, text)
+    entry.configure(state="readonly", width=max(1, len(text)))
+
+
 # ---------------------------------------------------------------------------
 # scrolling container
 # ---------------------------------------------------------------------------
@@ -290,6 +312,9 @@ TISSUE_FIELDS = [
     ("tissue", "interior_hole_min_tissue_frac", "float", "interior_hole_min_tissue_frac", "Fill an interior hole only if at least this fraction of its pixels are textured or teal (raise to fill less)."),
     ("tissue", "interior_hole_max_frac", "float", "interior_hole_max_frac", "Upper guard: never fill an interior hole bigger than this frame fraction."),
     ("tissue", "bg_max_tissue_frac", "float", "bg_max_tissue_frac", "If adaptive keeps more than this, retry with a stricter glass estimate."),
+    ("tissue", "margin_crop_px", "int", "margin_crop_px", "Trim this band (overview px) off the OUTER sides of the scanned mosaic-tile footprint (the scan border). Default 20, on. 0 = off."),
+    ("tissue", "margin_open_px", "int", "margin_open_px", "Drop thin margin debris (lacy tile-seam fingers / specks) via a morphological open of this radius (overview px). 0 = off."),
+    ("tissue", "margin_glass_pure", "float", "margin_glass_pure", "Drop a margin tile when >= this fraction of it is glass-coloured + non-teal (e.g. 0.98). 0 = off. Tile-aware; uniformly-pale sections need the exclusion brush."),
     ("artifact", "erode_px", "int", "border erode_px", "Erode the tissue border by this many overview px (drops edge halos). [artifact.erode_px]"),
 ]
 ARTIFACT_FIELDS = [

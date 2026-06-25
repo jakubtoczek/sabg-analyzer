@@ -42,25 +42,8 @@ def _read_rgb(path) -> np.ndarray | None:
     return None if bgr is None else cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
 
-def _selectable(parent, text: str = "", **kw) -> tk.Entry:
-    """A read-only Entry styled to read like a Label but with copy-selectable text.
-
-    Flat, borderless and background-matched to *parent* so it looks like a label; the
-    width tracks the content so it lays out like one. Update via `_set_selectable`."""
-    e = tk.Entry(parent, relief="flat", borderwidth=0, highlightthickness=0,
-                 readonlybackground=parent.cget("background"),
-                 width=max(1, len(text)), **kw)
-    e.insert(0, text)
-    e.configure(state="readonly")
-    return e
-
-
-def _set_selectable(entry: tk.Entry, text: str) -> None:
-    """Replace the text of a `_selectable` read-only Entry and resize it to fit."""
-    entry.configure(state="normal")
-    entry.delete(0, "end")
-    entry.insert(0, text)
-    entry.configure(state="readonly", width=max(1, len(text)))
+_selectable = gw.selectable          # shared copy-selectable read-only Entry (see widgets.py)
+_set_selectable = gw.set_selectable
 
 
 def _open_file(path: Path) -> None:

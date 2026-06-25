@@ -65,6 +65,11 @@ tissue:
   fill_interior_holes: false   # reclaim faint interior tissue dropped as glass: fill enclosed holes
                                # unless they look like bright glass / uniform bg-colour / mosaic gap
   interior_hole_max_frac: 0.02 # upper guard: never fill an interior hole bigger than this frame fraction
+  # Tile-edge crop (ON by default, 20 overview px). Trim this band off the OUTER sides of the acquired
+  # mosaic-tile footprint (the scan border, not interior tile seams) -> non-tissue. Content-free + robust;
+  # the section borders are of low interest and the inner tissue blob is untouched. 0 = off. Needs the
+  # CZI's acquired-tile geometry; flows through analysis AND the Preview ROI. Tune + eyeball on a real run.
+  margin_crop_px: 20           # trim this band (overview px) off the scanned-footprint outer edge. 0 = off.
   # Mosaic-margin debris trim (OFF by default). The scan margin leaves thin tissue-classified
   # junk -- lacy tile-seam fingers and small isolated specks between the tissue and the bright
   # glass margin -- that no colour/texture rule separates from faint tissue. A morphological
