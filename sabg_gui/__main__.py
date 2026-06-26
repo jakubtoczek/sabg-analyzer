@@ -217,6 +217,45 @@ class App:
     def _results_csv(self) -> Path:
         return Path(self.out_var.get()) / "results.csv"
 
+    def _deliverables_exist(self, kind: str) -> bool:
+        """True if running *kind* would clobber existing deliverables in the out folder."""
+        if kind == "analyze":
+            return self._results_csv().exists()
+        out = Path(self.out_var.get())                       # export: rewrites the figure dirs
+        return any((out / sub).exists() and any((out / sub).iterdir())
+                   for sub in ("sections", "exports"))
+
+    def _guard_overwrite(self, kind: str) -> bool:
+        """Prompt before clobbering. Returns False to abort the run.
+        analyze: Yes=overwrite / No=run into a dated sibling (keep old) / Cancel.
+        export:  overwrite-or-cancel (its figures regenerate from maps/)."""
+        if not self._deliverables_exist(kind):
+            return True
+        out = Path(self.out_var.get())
+        if kind == "analyze":
+            ans = messagebox.askyesnocancel(
+                "Overwrite existing results?",
+                f"{out}\nalready contains analysis results.\n\n"
+                "Yes  –  overwrite everything in this folder\n"
+                "No   –  run into a new dated folder (keep the old one)\n"
+                "Cancel  –  don't run")
+            if ans is None:
+                return False
+            if ans:
+                return True
+            new = out.with_name(f"{out.name}_{time.strftime('%Y%m%d-%H%M%S')}")
+            new.mkdir(parents=True, exist_ok=True)
+            for f in ("sections.csv", "config.yaml"):        # the inputs analyze needs
+                src = out / f
+                if src.exists():
+                    shutil.copyfile(src, new / f)
+            self.out_var.set(str(new))                       # subsequent Export targets it too
+            self._log(f"[gui] keeping old results; running into {new}")
+            return True
+        return bool(messagebox.askokcancel(                  # export
+            "Overwrite existing figures?",
+            f"{out}\nalready contains exported figures. Overwrite them?"))
+
     def _refresh_state(self) -> None:
         scanned = self._sections_csv().exists()
         analyzed = self._results_csv().exists()
@@ -234,8 +273,7 @@ class App:
             sr.configure(text="Stop", state="normal")
         else:
             sr.configure(text="Resume",
-                         state="normal" if (scanned and (analyzed or self._stopped))
-                         else "disabled")
+                         state="normal" if self._stopped else "disabled")
 
     # -- subprocess plumbing ----------------------------------------------
     def _run(self, cli_args: list[str], done=None) -> None:
@@ -417,6 +455,8 @@ class App:
                 "Run analyze anyway?")
             if not ok:
                 return
+        if not self._guard_overwrite("analyze"):
+            return
         args = ["analyze", "--data", self.data_var.get(),
                 "--out", self.out_var.get(), "--progress"]
         cfg = Path(self.out_var.get()) / "config.yaml"
@@ -425,6 +465,8 @@ class App:
         self._run(args, done=lambda rc: self._refresh_state())
 
     def on_export(self) -> None:
+        if not self._guard_overwrite("export"):
+            return
         args = ["export", "--data", self.data_var.get(), "--out", self.out_var.get()]
         cfg = Path(self.out_var.get()) / "config.yaml"
         if cfg.exists():

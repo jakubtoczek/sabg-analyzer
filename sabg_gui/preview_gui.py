@@ -43,7 +43,7 @@ from sabg_analyzer import czi_io, export, overlay, preview, whitebalance
 from sabg_analyzer.config import load_config
 
 _VIEW_MULTS = [1, 2, 4, 8]          # thumb-resolution multipliers for the px/µm picker
-_SPINNER = "◜◠◝◞◡◟"                  # rotating-arc frames for the Recompute "computing…" spinner
+_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"   # braille frames: fixed-width so "computing…" doesn't jitter as it spins
 # Scale-bar corner labels (clear) -> the export.draw_scalebar position codes.
 _SB_POS = {"bottom-right": "br", "bottom-left": "bl",
            "top-right": "tr", "top-left": "tl"}
@@ -487,6 +487,8 @@ class PreviewWindow(tk.Toplevel):
         cb_grid.pack(side="left", padx=(12, 2))
         gw.Tooltip(cb_grid, "Outline the acquired mosaic tiles on the Thumbnail (diagnostic). "
                             "The tile-edge crop / glass-tile removal act on these tiles.")
+        if source == "roi":
+            cb_grid.configure(state="disabled")   # overlay draws on the Thumbnail only
         # scale-bar controls live in a collapsed strip (rarely changed)
         sb = self._collapsible_strip(bar, strip_parent, "⚖ scale bar",
                                      after_widget=after_widget)
