@@ -939,7 +939,7 @@ class PreviewWindow(tk.Toplevel):
             f"artifact {int(row.get('artifact_px', 0)):,}  "
             f"edge {int(row.get('edge_px', 0)):,} px",
         ]
-        self.stats_label.configure(text="\n".join(lines))
+        gw.set_selectable_text(self.stats_label, "\n".join(lines))
         self._record_result_provenance("section")
 
     # -- result provenance / staleness -------------------------------------
@@ -1290,9 +1290,9 @@ class PreviewWindow(tk.Toplevel):
         # result characteristics (filled after each recompute / whole-section run)
         res = tk.LabelFrame(body, text="Result", padx=6, pady=2)
         res.pack(fill="x", padx=6, pady=2)
-        self.stats_label = tk.Label(res, text="(recompute to see %SABG, thresholds, areas)",
-                                    anchor="w", justify="left", font=("Consolas", 9),
-                                    fg="#333")
+        self.stats_label = gw.selectable_text(
+            res, "(recompute to see %SABG, thresholds, areas)",
+            font=("Consolas", 9), fg="#333")
         self.stats_label.pack(fill="x")
         # provenance / staleness line: which section + ROI this result came from, and
         # whether the current view has moved on since (the Result can lag the view).
@@ -2114,7 +2114,7 @@ class PreviewWindow(tk.Toplevel):
             od = dec[lay["sabg"]]
             lines.append(f"mean OD {float(od.mean()):.4f}  "
                          f"integrated OD {float(od.sum()):.1f}")
-        self.stats_label.configure(text="\n".join(lines))
+        gw.set_selectable_text(self.stats_label, "\n".join(lines))
 
     def _overlay_order(self) -> list | None:
         """The visible ``(mask, color, alpha)`` layers, in draw order (or None)."""

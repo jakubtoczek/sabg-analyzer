@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 import cv2
 import numpy as np
@@ -153,7 +153,7 @@ class InfoWindow(tk.Toplevel):
         tk.Button(btns, text="💾  Save sections.csv", font=("Segoe UI", 9, "bold"),
                   command=self.on_save).pack(side="left")
         tk.Button(btns, text="Open", command=lambda: _open_file(self.csv_path)).pack(side="left", padx=6)
-        tk.Button(btns, text="Reload", command=self._reload).pack(side="left")
+        tk.Button(btns, text="Revert", command=self._reload).pack(side="left")
         tk.Button(btns, text="Uncheck all", command=lambda: self._set_all_analyze(False)).pack(side="left", padx=(12, 2))
         tk.Button(btns, text="Check all", command=lambda: self._set_all_analyze(True)).pack(side="left")
         tk.Button(btns, text="?", width=2, command=self._show_help).pack(side="right")
@@ -182,9 +182,8 @@ class InfoWindow(tk.Toplevel):
         tk.Button(bar, text="next ▶", command=lambda: self._step(1)).pack(side="left", padx=2)
         self.view_title = _selectable(bar, "—", font=("Segoe UI", 9, "bold"))
         self.view_title.pack(side="left", padx=10)
+        # zoom is the mouse wheel (CanvasNav); no zoom buttons — they fought the resize.
         tk.Button(bar, text="reset", command=self._reset_view).pack(side="right", padx=2)
-        tk.Button(bar, text="zoom −", command=lambda: self._zoom_btn(1.25)).pack(side="right", padx=2)
-        tk.Button(bar, text="zoom +", command=lambda: self._zoom_btn(0.8)).pack(side="right", padx=2)
         tk.Button(bar, text="↻ 90°", command=lambda: self._rotate(1)).pack(side="right", padx=2)
         tk.Button(bar, text="↺ 90°", command=lambda: self._rotate(-1)).pack(side="right", padx=2)
 
@@ -281,6 +280,7 @@ class InfoWindow(tk.Toplevel):
                     color="#999", fontsize=11)
         else:
             ax.imshow(np.rot90(img, self._rot[tabkey]) if self._rot[tabkey] else img)
+        ax.set_aspect("equal")          # pin aspect so a window/pane resize can't distort it
         self.navs[tabkey].clear_home()
         self.canvases[tabkey].draw_idle()
         self.navs[tabkey].set_home()
@@ -289,14 +289,6 @@ class InfoWindow(tk.Toplevel):
         t = self._cur_tab()
         self._rot[t] = (self._rot[t] + direction) % 4
         self._redraw_tab(t)
-
-    def _zoom_btn(self, factor: float) -> None:
-        ax = self.axes[self._cur_tab()]
-        x0, x1 = ax.get_xlim(); y0, y1 = ax.get_ylim()
-        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-        ax.set_xlim(cx - (cx - x0) * factor, cx + (x1 - cx) * factor)
-        ax.set_ylim(cy - (cy - y0) * factor, cy + (y1 - cy) * factor)
-        self.canvases[self._cur_tab()].draw_idle()
 
     def _reset_view(self) -> None:
         self.navs[self._cur_tab()].reset()
@@ -426,7 +418,7 @@ class InfoWindow(tk.Toplevel):
             ("Label / Thumbs viewer",
              "Two tabs — the slide Label image (what identifies a slide) and the "
              "section Thumbnail. Wheel zooms to the cursor; middle/right-drag pans; "
-             "the toolbar rotates 90° left/right, zooms in/out, and resets the view."),
+             "the toolbar rotates 90° left/right and resets the view."),
             ("Resolution",
              "Labels and thumbs are shown at the resolution Scan saved them; zoom in "
              "for detail (they can't be re-read finer from the CZI)."),
@@ -466,7 +458,9 @@ class ConfigWindow(tk.Toplevel):
                   command=self.on_save).pack(side="left")
         tk.Button(btns, text="Open config.yaml",
                   command=lambda: _open_file(self.cfg_path)).pack(side="left", padx=6)
-        tk.Button(btns, text="Reload", command=self._reload).pack(side="left")
+        tk.Button(btns, text="Load metadata.csv",
+                  command=self._load_metadata_csv).pack(side="left")
+        tk.Button(btns, text="Revert", command=self._reload).pack(side="left", padx=6)
         tk.Button(btns, text="?", width=2, command=self._show_help).pack(side="right")
 
         nb = ttk.Notebook(self)
@@ -502,6 +496,16 @@ class ConfigWindow(tk.Toplevel):
         nb.add(t3, text="Export")
         gw.build_groups(t3.interior, self._export_obj, gw.EXPORT_GROUPS,
                         self.export_vars, self._on_export_field, recompute=False)
+
+    def _load_metadata_csv(self) -> None:
+        """Open a metadata .csv (the run/params/acquisition record analyze writes next to
+        config.yaml). Defaults to the output folder's metadata.csv; opens it for viewing."""
+        p = filedialog.askopenfilename(
+            parent=self, title="Load metadata .csv file",
+            initialdir=str(self.cfg_path.parent), initialfile="metadata.csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")])
+        if p:
+            _open_file(Path(p))
 
     def _reload(self) -> None:
         for w in list(self.children.values()):
@@ -597,8 +601,9 @@ class ConfigWindow(tk.Toplevel):
              "FOV. Section figures: one file per sec_variants entry, each a set of "
              "underscore-joined tokens (base raw|wb, overlay overlay|overlaysabg, fov "
              "boxes, scalebar), e.g. wb_overlay_fov_scalebar."),
-            ("Save / Reload",
+            ("Save / Revert / Load metadata.csv",
              "Save writes the full config.yaml (every block, directly re-loadable). "
-             "Reload re-reads config.yaml, discarding unsaved edits. Per-scene overrides "
-             "live under scenes.<file:idx> and are preserved."),
+             "Revert re-reads config.yaml, discarding unsaved edits. Load metadata.csv "
+             "opens a run's metadata.csv (run/params/acquisition record) for viewing. "
+             "Per-scene overrides live under scenes.<file:idx> and are preserved."),
         ])

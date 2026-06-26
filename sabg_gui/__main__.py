@@ -219,11 +219,17 @@ class App:
     def _results_csv(self) -> Path:
         return Path(self.out_var.get()) / "results.csv"
 
-    # deliverables that a run would overwrite (NOT config.yaml / exclusions / cache).
+    # deliverables a run overwrites (used only to detect a clash); and the inputs a
+    # fresh run needs copied into a new output folder so it stands alone (the old
+    # folder — config.yaml, results, figures, cache — is left fully intact).
     _DELIVERABLES = {
         "analyze": (["results.csv", "results_detailed.csv", "results.xlsx",
                      "metadata.csv"], ["sections"]),
         "export":  ([], ["sections", "exports"]),
+    }
+    _SEED = {   # files / dirs to copy into a new run folder
+        "analyze": (["config.yaml", "sections.csv"], ["exclude", "labels", "thumbs"]),
+        "export":  (["config.yaml", "sections.csv", "results.csv"], ["exclude", "maps"]),
     }
 
     def _deliverables_exist(self, kind: str) -> bool:
@@ -234,37 +240,49 @@ class App:
                 or any((out / d).is_dir() and any((out / d).iterdir()) for d in dirs))
 
     def _guard_overwrite(self, kind: str) -> bool:
-        """Prompt before clobbering existing deliverables. Returns False to abort.
-        'Keep old' renames the existing results/figures with a (editable) date tag,
-        leaving config.yaml / exclusions / cache in place, then runs fresh."""
+        """Prompt before clobbering existing results. Returns False to abort the run.
+        The new run can go to a fresh folder (the old one is kept untouched) or
+        overwrite in place. On 'new folder' the inputs the run needs are copied over
+        and the output folder is switched to it."""
         if not self._deliverables_exist(kind):
             return True
-        action, tag = self._ask_overwrite(kind)
+        action, dest = self._ask_new_output(kind)
         if action == "cancel":
             return False
-        if action == "archive":
-            self._archive_deliverables(kind, tag or time.strftime("%Y%m%d-%H%M%S"))
+        if action == "newfolder":
+            if not self._seed_new_output(kind, dest):
+                return False
         return True
 
-    def _ask_overwrite(self, kind: str) -> tuple[str, str]:
-        """Modal dialog. Returns (action, tag); action in keep/overwrite/cancel."""
-        out = self.out_var.get()
-        what = ("analysis results (results.csv, metadata, sections\\)" if kind == "analyze"
-                else "exported figures (sections\\, exports\\)")
+    def _ask_new_output(self, kind: str) -> tuple[str, str]:
+        """Modal dialog. Returns (action, dest); action in newfolder/overwrite/cancel.
+        *dest* is the chosen new output folder (editable, browse-able; date-tagged default)."""
+        out = Path(self.out_var.get())
+        what = "analysis results" if kind == "analyze" else "exported figures"
+        default = str(out.with_name(f"{out.name}_{time.strftime('%Y%m%d-%H%M%S')}"))
         win = tk.Toplevel(self.root)
         win.title("Existing results found")
         win.transient(self.root)
         win.resizable(False, False)
         tk.Label(win, justify="left", padx=14, pady=10, anchor="w",
                  text=(f"{out}\nalready contains {what}.\n\n"
-                       "“Keep old” renames them with the tag below, then runs fresh\n"
-                       "(config.yaml, exclusions and cache stay in place)."),
+                       "Run into a NEW folder (the old one is kept untouched), or\n"
+                       "overwrite in place. The new folder is seeded with the config,\n"
+                       "sections.csv and exclusions so it runs standalone."),
                  ).pack(anchor="w")
         row = tk.Frame(win)
         row.pack(fill="x", padx=14)
-        tk.Label(row, text="tag for the kept copy:").pack(side="left")
-        tag_var = tk.StringVar(value=time.strftime("%Y%m%d-%H%M%S"))
-        tk.Entry(row, textvariable=tag_var, width=22).pack(side="left", padx=6)
+        tk.Label(row, text="new output folder:").pack(side="left")
+        dest_var = tk.StringVar(value=default)
+        tk.Entry(row, textvariable=dest_var, width=40).pack(side="left", padx=6, fill="x", expand=True)
+
+        def browse() -> None:
+            d = filedialog.askdirectory(initialdir=str(out.parent), parent=win,
+                                        title="Pick the new output folder")
+            if d:
+                dest_var.set(str(Path(d)))
+
+        tk.Button(row, text="Browse…", command=browse).pack(side="left")
         result = {"action": "cancel"}
 
         def choose(a: str) -> None:
@@ -273,45 +291,43 @@ class App:
 
         btns = tk.Frame(win)
         btns.pack(pady=12)
-        keep = tk.Button(btns, text="Keep old + run", width=14,
-                         command=lambda: choose("archive"))
-        keep.pack(side="left", padx=4)
-        tk.Button(btns, text="Overwrite", width=12,
+        nf = tk.Button(btns, text="Run in new folder", width=16,
+                       command=lambda: choose("newfolder"))
+        nf.pack(side="left", padx=4)
+        tk.Button(btns, text="Overwrite here", width=14,
                   command=lambda: choose("overwrite")).pack(side="left", padx=4)
         tk.Button(btns, text="Cancel", width=10,
                   command=lambda: choose("cancel")).pack(side="left", padx=4)
-        keep.focus_set()
-        win.bind("<Return>", lambda _e: choose("archive"))
+        nf.focus_set()
+        win.bind("<Return>", lambda _e: choose("newfolder"))
         win.bind("<Escape>", lambda _e: choose("cancel"))
         win.grab_set()
         self.root.wait_window(win)
-        return result["action"], tag_var.get().strip()
+        return result["action"], dest_var.get().strip()
 
-    def _archive_deliverables(self, kind: str, tag: str) -> None:
-        """Rename existing deliverables to '<name>_<tag>' so a fresh run won't clobber them."""
-        out = Path(self.out_var.get())
-        files, dirs = self._DELIVERABLES[kind]
-        moved = []
-        for name in files:
-            src = out / name
-            if src.exists():
-                dst = src.with_name(f"{src.stem}_{tag}{src.suffix}")
-                try:
-                    src.rename(dst)
-                    moved.append(dst.name)
-                except OSError as exc:
-                    self._log(f"[gui] could not keep {name}: {exc} (it may be open)")
-        for name in dirs:
-            src = out / name
-            if src.is_dir():
-                dst = out / f"{name}_{tag}"
-                try:
-                    src.rename(dst)
-                    moved.append(dst.name + "\\")
-                except OSError as exc:
-                    self._log(f"[gui] could not keep {name}\\: {exc}")
-        if moved:
-            self._log(f"[gui] kept old outputs as: {', '.join(moved)}")
+    def _seed_new_output(self, kind: str, dest: str) -> bool:
+        """Create *dest* and copy the inputs the run needs, then switch the output
+        folder to it. Returns False (aborting the run) if it can't be set up."""
+        if not dest:
+            messagebox.showwarning("New folder", "No folder name given.")
+            return False
+        src = Path(self.out_var.get())
+        new = Path(dest)
+        try:
+            new.mkdir(parents=True, exist_ok=True)
+            files, dirs = self._SEED[kind]
+            for name in files:
+                if (src / name).exists():
+                    shutil.copyfile(src / name, new / name)
+            for name in dirs:
+                if (src / name).is_dir():
+                    shutil.copytree(src / name, new / name, dirs_exist_ok=True)
+        except OSError as exc:
+            messagebox.showerror("New folder", f"Could not set up {new}:\n{exc}")
+            return False
+        self.out_var.set(str(new))      # the run (and later Export) target the new folder
+        self._log(f"[gui] running into new folder: {new} (old results kept in {src})")
+        return True
 
     def _refresh_state(self) -> None:
         scanned = self._sections_csv().exists()
@@ -512,7 +528,9 @@ class App:
             self._log(f"[gui] nothing to open for {wanted} (run Scan first?)")
 
     def on_analyze(self) -> None:
-        if not self._identity_ok():
+        if not self._guard_overwrite("analyze"):   # overwrite/new-folder choice first…
+            return
+        if not self._identity_ok():                # …then the animal-ID sanity warning
             ok = messagebox.askyesno(
                 "Animal ID not filled",
                 "Some sections to be analysed have no animal-identification "
@@ -521,8 +539,6 @@ class App:
                 "Run analyze anyway?")
             if not ok:
                 return
-        if not self._guard_overwrite("analyze"):
-            return
         args = ["analyze", "--data", self.data_var.get(),
                 "--out", self.out_var.get(), "--progress"]
         cfg = Path(self.out_var.get()) / "config.yaml"

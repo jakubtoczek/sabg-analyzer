@@ -76,6 +76,34 @@ def set_selectable(entry: tk.Entry, text: str) -> None:
     entry.configure(state="readonly", width=max(1, len(text)))
 
 
+def selectable_text(parent, text: str = "", **kw) -> tk.Text:
+    """A read-only, copy-selectable MULTI-line block styled like a Label.
+
+    The multi-line sibling of :func:`selectable` (e.g. the Preview Result %SABG block).
+    Stays state="normal" so selection + Ctrl+C work; keystrokes are swallowed so it
+    can't be edited. Height tracks the line count. Update via :func:`set_selectable_text`."""
+    t = tk.Text(parent, relief="flat", borderwidth=0, highlightthickness=0,
+                bg=parent.cget("background"), wrap="none", cursor="xterm",
+                height=max(1, text.count("\n") + 1), **kw)
+    t.insert("1.0", text)
+
+    def _block(e):
+        # allow copy / select-all (Ctrl+C / Ctrl+A); block everything that edits
+        if (e.state & 0x4) and e.keysym.lower() in ("c", "a"):
+            return None
+        return "break"
+
+    t.bind("<Key>", _block)
+    return t
+
+
+def set_selectable_text(widget: tk.Text, text: str) -> None:
+    """Replace the text of a :func:`selectable_text` read-only Text and resize to fit."""
+    widget.delete("1.0", "end")
+    widget.insert("1.0", text)
+    widget.configure(height=max(1, text.count("\n") + 1))
+
+
 # ---------------------------------------------------------------------------
 # scrolling container
 # ---------------------------------------------------------------------------
