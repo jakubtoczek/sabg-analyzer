@@ -141,6 +141,8 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--formats", nargs="+", default=None, metavar="FMT",
                    help="output formats: tif and/or png (default tif)")
     e.add_argument("--scene", default=None, help="only this scene, e.g. 2026_05_29__10215:0")
+    e.add_argument("--continue", "--reuse", dest="continue_run", action="store_true",
+                   help="resume: skip scenes whose figures already exist on disk")
 
     return parser
 
@@ -203,7 +205,8 @@ def _dispatch(args) -> int:
             plain=args.plain, qc_overlay=args.qc_overlay,
             formats=(tuple(args.formats) if args.formats is not None else None),
         )
-        export(args.data, args.out, p, cfg, only_scene=args.scene)
+        export(args.data, args.out, p, cfg, only_scene=args.scene,
+               resume=getattr(args, "continue_run", False))
         return 0
 
     return 1

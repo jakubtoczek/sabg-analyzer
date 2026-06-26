@@ -482,13 +482,18 @@ class PreviewWindow(tk.Toplevel):
         self._tone_row(tn, "gamma", self.tone_gamma, 0.2, 3.0,
                        tip="Display gamma (figures only); 1.0 is a no-op, >1 brightens mid-tones.")
         tk.Button(tn, text="reset", command=self._reset_tone).pack(side="left", padx=(8, 2))
-        cb_grid = tk.Checkbutton(tn, text="tile grid", variable=self.show_tile_grid,
-                                 command=self._toggle_tile_grid)
+        if source == "roi":
+            # The overlay only draws on the Thumbnail, so the ROI copy is inert:
+            # its own always-False var (never the shared one) + permanently disabled.
+            self._roi_grid_dummy = tk.BooleanVar(value=False)
+            cb_grid = tk.Checkbutton(tn, text="tile grid", variable=self._roi_grid_dummy,
+                                     state="disabled")
+        else:
+            cb_grid = tk.Checkbutton(tn, text="tile grid", variable=self.show_tile_grid,
+                                     command=self._toggle_tile_grid)
         cb_grid.pack(side="left", padx=(12, 2))
         gw.Tooltip(cb_grid, "Outline the acquired mosaic tiles on the Thumbnail (diagnostic). "
                             "The tile-edge crop / glass-tile removal act on these tiles.")
-        if source == "roi":
-            cb_grid.configure(state="disabled")   # overlay draws on the Thumbnail only
         # scale-bar controls live in a collapsed strip (rarely changed)
         sb = self._collapsible_strip(bar, strip_parent, "⚖ scale bar",
                                      after_widget=after_widget)

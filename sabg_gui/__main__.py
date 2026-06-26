@@ -83,6 +83,8 @@ class App:
         self._proc = None                # the running CLI subprocess (for Stop)
         self._stopped = False            # a run was stopped -> offer Resume even if
                                          # no section finished yet (nothing checkpointed)
+        self._run_kind = None            # "analyze" / "export": what the live run is
+        self._stopped_kind = None        # what the stopped run was, so Resume continues IT
         root.title(f"SABG Analyzer {__version__}")
         root.geometry("880x580")
         root.minsize(740, 470)
@@ -217,44 +219,99 @@ class App:
     def _results_csv(self) -> Path:
         return Path(self.out_var.get()) / "results.csv"
 
+    # deliverables that a run would overwrite (NOT config.yaml / exclusions / cache).
+    _DELIVERABLES = {
+        "analyze": (["results.csv", "results_detailed.csv", "results.xlsx",
+                     "metadata.csv"], ["sections"]),
+        "export":  ([], ["sections", "exports"]),
+    }
+
     def _deliverables_exist(self, kind: str) -> bool:
         """True if running *kind* would clobber existing deliverables in the out folder."""
-        if kind == "analyze":
-            return self._results_csv().exists()
-        out = Path(self.out_var.get())                       # export: rewrites the figure dirs
-        return any((out / sub).exists() and any((out / sub).iterdir())
-                   for sub in ("sections", "exports"))
+        out = Path(self.out_var.get())
+        files, dirs = self._DELIVERABLES[kind]
+        return (any((out / f).exists() for f in files)
+                or any((out / d).is_dir() and any((out / d).iterdir()) for d in dirs))
 
     def _guard_overwrite(self, kind: str) -> bool:
-        """Prompt before clobbering. Returns False to abort the run.
-        analyze: Yes=overwrite / No=run into a dated sibling (keep old) / Cancel.
-        export:  overwrite-or-cancel (its figures regenerate from maps/)."""
+        """Prompt before clobbering existing deliverables. Returns False to abort.
+        'Keep old' renames the existing results/figures with a (editable) date tag,
+        leaving config.yaml / exclusions / cache in place, then runs fresh."""
         if not self._deliverables_exist(kind):
             return True
+        action, tag = self._ask_overwrite(kind)
+        if action == "cancel":
+            return False
+        if action == "archive":
+            self._archive_deliverables(kind, tag or time.strftime("%Y%m%d-%H%M%S"))
+        return True
+
+    def _ask_overwrite(self, kind: str) -> tuple[str, str]:
+        """Modal dialog. Returns (action, tag); action in keep/overwrite/cancel."""
+        out = self.out_var.get()
+        what = ("analysis results (results.csv, metadata, sections\\)" if kind == "analyze"
+                else "exported figures (sections\\, exports\\)")
+        win = tk.Toplevel(self.root)
+        win.title("Existing results found")
+        win.transient(self.root)
+        win.resizable(False, False)
+        tk.Label(win, justify="left", padx=14, pady=10, anchor="w",
+                 text=(f"{out}\nalready contains {what}.\n\n"
+                       "“Keep old” renames them with the tag below, then runs fresh\n"
+                       "(config.yaml, exclusions and cache stay in place)."),
+                 ).pack(anchor="w")
+        row = tk.Frame(win)
+        row.pack(fill="x", padx=14)
+        tk.Label(row, text="tag for the kept copy:").pack(side="left")
+        tag_var = tk.StringVar(value=time.strftime("%Y%m%d-%H%M%S"))
+        tk.Entry(row, textvariable=tag_var, width=22).pack(side="left", padx=6)
+        result = {"action": "cancel"}
+
+        def choose(a: str) -> None:
+            result["action"] = a
+            win.destroy()
+
+        btns = tk.Frame(win)
+        btns.pack(pady=12)
+        keep = tk.Button(btns, text="Keep old + run", width=14,
+                         command=lambda: choose("archive"))
+        keep.pack(side="left", padx=4)
+        tk.Button(btns, text="Overwrite", width=12,
+                  command=lambda: choose("overwrite")).pack(side="left", padx=4)
+        tk.Button(btns, text="Cancel", width=10,
+                  command=lambda: choose("cancel")).pack(side="left", padx=4)
+        keep.focus_set()
+        win.bind("<Return>", lambda _e: choose("archive"))
+        win.bind("<Escape>", lambda _e: choose("cancel"))
+        win.grab_set()
+        self.root.wait_window(win)
+        return result["action"], tag_var.get().strip()
+
+    def _archive_deliverables(self, kind: str, tag: str) -> None:
+        """Rename existing deliverables to '<name>_<tag>' so a fresh run won't clobber them."""
         out = Path(self.out_var.get())
-        if kind == "analyze":
-            ans = messagebox.askyesnocancel(
-                "Overwrite existing results?",
-                f"{out}\nalready contains analysis results.\n\n"
-                "Yes  –  overwrite everything in this folder\n"
-                "No   –  run into a new dated folder (keep the old one)\n"
-                "Cancel  –  don't run")
-            if ans is None:
-                return False
-            if ans:
-                return True
-            new = out.with_name(f"{out.name}_{time.strftime('%Y%m%d-%H%M%S')}")
-            new.mkdir(parents=True, exist_ok=True)
-            for f in ("sections.csv", "config.yaml"):        # the inputs analyze needs
-                src = out / f
-                if src.exists():
-                    shutil.copyfile(src, new / f)
-            self.out_var.set(str(new))                       # subsequent Export targets it too
-            self._log(f"[gui] keeping old results; running into {new}")
-            return True
-        return bool(messagebox.askokcancel(                  # export
-            "Overwrite existing figures?",
-            f"{out}\nalready contains exported figures. Overwrite them?"))
+        files, dirs = self._DELIVERABLES[kind]
+        moved = []
+        for name in files:
+            src = out / name
+            if src.exists():
+                dst = src.with_name(f"{src.stem}_{tag}{src.suffix}")
+                try:
+                    src.rename(dst)
+                    moved.append(dst.name)
+                except OSError as exc:
+                    self._log(f"[gui] could not keep {name}: {exc} (it may be open)")
+        for name in dirs:
+            src = out / name
+            if src.is_dir():
+                dst = out / f"{name}_{tag}"
+                try:
+                    src.rename(dst)
+                    moved.append(dst.name + "\\")
+                except OSError as exc:
+                    self._log(f"[gui] could not keep {name}\\: {exc}")
+        if moved:
+            self._log(f"[gui] kept old outputs as: {', '.join(moved)}")
 
     def _refresh_state(self) -> None:
         scanned = self._sections_csv().exists()
@@ -276,11 +333,12 @@ class App:
                          state="normal" if self._stopped else "disabled")
 
     # -- subprocess plumbing ----------------------------------------------
-    def _run(self, cli_args: list[str], done=None) -> None:
+    def _run(self, cli_args: list[str], done=None, kind: str | None = None) -> None:
         """Run `python -m sabg_analyzer <cli_args>` in a worker thread."""
         if self.running:
             return
         self.running = True
+        self._run_kind = kind            # remember what this run is (for Stop/Resume)
         self._stopped = False            # starting a fresh run clears the stop flag
         self._ensure_session_log()
         # The GUI keeps the single session log; tell the CLI not to add its own.
@@ -314,6 +372,7 @@ class App:
         if proc is None or proc.poll() is not None:
             return
         self._stopped = True      # enable Resume even if no section finished yet
+        self._stopped_kind = self._run_kind   # Resume continues whatever was stopped
         self._log("[gui] stop requested - terminating the current run…")
         try:
             proc.terminate()      # finished sections are checkpointed; Resume continues
@@ -328,17 +387,24 @@ class App:
             self.on_continue()
 
     def on_continue(self) -> None:
-        """Re-run analyze skipping sections already in results.csv (resume).
+        """Resume the operation that was stopped, skipping work already on disk.
 
-        Analyze now bundles export, so this resumes both phases: finished sections
-        (in results.csv) are skipped and their figures (if already on disk) are not
-        re-rendered."""
+        Export → resume export (skip scenes whose figures exist). Analyze (or an
+        unknown/older stop) → resume analyze: finished sections in results.csv are
+        skipped, and analyze's bundled export skips figures already rendered."""
+        cfg = Path(self.out_var.get()) / "config.yaml"
+        if self._stopped_kind == "export":
+            args = ["export", "--data", self.data_var.get(),
+                    "--out", self.out_var.get(), "--continue"]
+            if cfg.exists():
+                args += ["--config", str(cfg)]
+            self._run(args, done=lambda rc: self._refresh_state(), kind="export")
+            return
         args = ["analyze", "--data", self.data_var.get(),
                 "--out", self.out_var.get(), "--progress", "--continue"]
-        cfg = Path(self.out_var.get()) / "config.yaml"
         if cfg.exists():
             args += ["--config", str(cfg)]
-        self._run(args, done=lambda rc: self._refresh_state())
+        self._run(args, done=lambda rc: self._refresh_state(), kind="analyze")
 
     def _drain_queue(self) -> None:
         try:
@@ -462,7 +528,7 @@ class App:
         cfg = Path(self.out_var.get()) / "config.yaml"
         if cfg.exists():
             args += ["--config", str(cfg)]
-        self._run(args, done=lambda rc: self._refresh_state())
+        self._run(args, done=lambda rc: self._refresh_state(), kind="analyze")
 
     def on_export(self) -> None:
         if not self._guard_overwrite("export"):
@@ -471,7 +537,7 @@ class App:
         cfg = Path(self.out_var.get()) / "config.yaml"
         if cfg.exists():
             args += ["--config", str(cfg)]
-        self._run(args)
+        self._run(args, kind="export")
 
     # -- config-driven helpers --------------------------------------------
     def _read_config(self) -> dict:
