@@ -3,9 +3,12 @@
 Quantify **SA-β-Gal (SABG) positive area** in brightfield CZI whole-slide images of
 murine A549 tumor tissue (untreated vs. senescence-inducing treatment at 3 / 7 days).
 
-_Versioning: Semantic Versioning, pre-1.0 (beta); the version tracks accumulated capability, not
-session count. The canonical change record is the git commit log; a human-readable digest is kept
-locally in the sibling `../misc/CHANGELOG.md` (outside the repo)._
+_Versioning: CalVer `YYYY.M.D` - the version is the date the shipping code last changed
+(`2026.9.16`), with `.1`, `.2` for a second release the same day. `python misc/bump.py` stamps it;
+it lives in `sabg_analyzer/__init__.py` and hatchling reads it from there, so `--version`, the
+window title and the `analyzer_version` column in every results file are the same number. The
+canonical change record is the git commit log; a human-readable digest is kept locally in the
+sibling `../misc/CHANGELOG.md` (outside the repo)._
 
 For each tissue section:
 
@@ -99,6 +102,7 @@ cd sabg-analyzer
 uv run --project . python -m sabg_gui              # the GUI
 uv run --project . python -m sabg_analyzer scan    # or the CLI
 
+python misc/bump.py           # stamp today's date as the version (before committing)
 bash misc/root_test.sh       # where the launcher decides to install
 bash misc/uninstall_test.sh  # what the uninstaller removes
 ```
