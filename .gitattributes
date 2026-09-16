@@ -1,0 +1,2 @@
+# The sandbox tests are run with Git Bash; CRLF would make them die on $'\r'.
+*.sh text eol=lf

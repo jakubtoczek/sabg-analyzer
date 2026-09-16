@@ -487,7 +487,7 @@ class App:
             messagebox.showerror(
                 "Preview unavailable",
                 f"Could not open the preview window:\n{exc}\n\n"
-                "It needs matplotlib (see requirements.txt).")
+                "It needs matplotlib; re-run SABG_Analyzer.bat to install it.")
             self._log(f"[gui] preview error: {exc}")
 
     def on_help(self) -> None:

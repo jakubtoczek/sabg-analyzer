@@ -1,142 +1,87 @@
 @echo off
-rem ===========================================================================
-rem  Double-click launcher for the SABG Analyzer GUI.
-rem  - Prefers a Python that ALREADY has the packages; otherwise prefers a
-rem    wheel-friendly version (3.12/3.11/3.10) over a too-new one (3.13/3.14...),
-rem    because pylibCZIrw only ships prebuilt wheels for ~3.9-3.12. On a newer
-rem    Python there is no wheel (and pip would try to COMPILE it -> needs CMake).
-rem  - If only a too-new Python exists, it offers to install 3.12 via the Python
-rem    manager (py install 3.12), else guides a manual 3.12 install.
-rem  - Installs wheels only (never compiles); check/install/launch use ONE Python.
-rem  - Works from a network / OneDrive Desktop (UNC): everything is keyed off this
-rem    script's own folder (%~dp0), never the current directory.
-rem ===========================================================================
-set "HERE=%~dp0"
-pushd "%HERE%" 2>nul
+setlocal
+title SABG Analyzer launcher
 
-set "DEPS=import pylibCZIrw,czifile,skimage,numpy,cv2,pandas,matplotlib,yaml"
-rem Interpreter preference (wheel-friendly versions first, then PATH python, then py):
-set "CANDS="py -3.12" "py -3.11" "py -3.10" "python" "py""
+rem --- where the Python runtime lives (no admin, no PATH or registry changes) ---
+rem     shared:  one Python + one package cache for every tool set up this way
+rem     private: a self-contained folder only SABG Analyzer uses
+rem     The interpreter is fetched and pinned here, which is why this script no
+rem     longer hunts for a system Python: the CZI reader has no wheel past 3.13,
+rem     and that constraint now lives in pyproject.toml instead of in a version
+rem     gate the user has to satisfy by hand.
+set "SHARED_ROOT=C:\ProgramData\PyApps"
+set "PRIVATE_ROOT=C:\Users\Public\SABG_Analyzer"
+set "PROJECT=%~dp0"
+set "PYTHONPATH=%~dp0"
 
-rem 1) A Python that ALREADY imports everything wins.
-set "PY="
-for %%C in (%CANDS%) do if not defined PY ( %%~C -c "%DEPS%" >nul 2>nul && set "PY=%%~C" )
-if defined PY goto :launch
+rem --- pick a root. No question is asked: shared unless you ask for private. ---
+rem       SABG_Analyzer.bat private   (or 2)  -> a folder only this tool uses
+rem       set SABG_ANALYZER_RUNTIME=...    -> some other location of your own
+rem     After the first run the folder on disk is the memory, so a plain
+rem     double-click (and the Desktop shortcut) re-use whatever is there.
+set "ROOT="
+if defined SABG_ANALYZER_RUNTIME set "ROOT=%SABG_ANALYZER_RUNTIME%"
+if not defined ROOT if /I "%~1"=="private" set "ROOT=%PRIVATE_ROOT%"
+if not defined ROOT if "%~1"=="2" set "ROOT=%PRIVATE_ROOT%"
+if not defined ROOT if exist "%PRIVATE_ROOT%\uv.exe" set "ROOT=%PRIVATE_ROOT%"
+if not defined ROOT if exist "%SHARED_ROOT%\uv.exe"  set "ROOT=%SHARED_ROOT%"
+if not defined ROOT set "ROOT=%SHARED_ROOT%"
 
-rem 2) None has the packages yet -> pick one to install into (wheel-friendly first).
-set "PY="
-for %%C in (%CANDS%) do if not defined PY ( %%~C -c "import sys" >nul 2>nul && set "PY=%%~C" )
-if not defined PY goto :no_python
+set "UV=%ROOT%\uv.exe"
+set "UV_PYTHON_INSTALL_DIR=%ROOT%\python"
+set "UV_CACHE_DIR=%ROOT%\cache"
+set "UV_PROJECT_ENVIRONMENT=%ROOT%\envs\sabg_analyzer"
+rem the cache must sit on the same drive as the venv, or uv copies instead of
+rem hardlinking and the sharing buys nothing
+set "UV_NO_MODIFY_PATH=1"
 
-rem 2b) Reject a too-new (or too-old) Python BEFORE the doomed install: pylibCZIrw
-rem     wheels exist only for CPython 3.9 - 3.12. Gate on Python's EXIT CODE, not a
-rem     captured stdout number: on some setups (e.g. the new PyManager 'python') the
-rem     old `for /f` capture came back EMPTY, so the guard fell through and a 3.13/3.14
-rem     went on to a doomed pylibCZIrw install. An exit code can't be lost this way.
-%PY% -c "import sys; v=sys.version_info[0]*100+sys.version_info[1]; sys.exit(0 if 309<=v<=312 else 1)"
-if errorlevel 1 goto :wrong_python
-
-:install_deps
-echo.
-%PY% -c "import sys;print('Using Python',sys.version.split()[0],'at',sys.executable)"
-echo.
-if not exist "%HERE%requirements.txt" (
-    echo ERROR: requirements.txt was not found next to this launcher:
-    echo     "%HERE%requirements.txt"
-    echo Double-click SABG_Analyzer.bat from INSIDE the unzipped project folder
-    echo ^(the folder that also contains requirements.txt and the sabg_gui folder^).
-    pause
-    goto :end
+rem --- one-time: fetch the uv binary ---
+if not exist "%UV%" (
+    echo First run: downloading uv into %ROOT% ...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+        "New-Item -ItemType Directory -Force -Path '%ROOT%' | Out-Null;" ^
+        "Invoke-WebRequest -Uri 'https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip' -OutFile '%ROOT%\uv.zip';" ^
+        "Expand-Archive -Force '%ROOT%\uv.zip' '%ROOT%';" ^
+        "Remove-Item '%ROOT%\uv.zip'"
+    if not exist "%UV%" (
+        echo Failed to download uv into %ROOT%.
+        echo Check your internet connection, or whether that folder is writable.
+        pause
+        exit /b 1
+    )
 )
-echo SABG Analyzer needs to install a few Python packages the first time it runs
-echo (a couple of minutes, needs an internet connection).
-echo.
-set /p "ANS=Install them into the Python above now? [Y/n] "
-if /I "%ANS%"=="n" goto :abort
-%PY% -m pip install --upgrade pip
-rem --only-binary=pylibCZIrw: use a prebuilt wheel, never compile from source.
-%PY% -m pip install --only-binary=pylibCZIrw -r "%HERE%requirements.txt"
-if errorlevel 1 goto :pip_failed
-echo.
-echo Done. Starting SABG Analyzer...
 
-:launch
-rem Make the package importable regardless of the current directory (a UNC Desktop
-rem can leave cmd's cwd in C:\Windows), then launch windowless when possible.
-set "PYTHONPATH=%HERE%;%PYTHONPATH%"
-if /I "%PY%"=="python"   ( where pythonw >nul 2>nul && ( start "" pythonw -m sabg_gui & goto :end ) )
-if /I "%PY%"=="py"       ( where pyw     >nul 2>nul && ( start "" pyw -m sabg_gui     & goto :end ) )
-if /I "%PY:~0,3%"=="py " ( where pyw     >nul 2>nul && ( start "" pyw%PY:~2% -m sabg_gui & goto :end ) )
-%PY% -m sabg_gui
-goto :end
+rem --- install Python + dependencies (fast no-op once done) ---
+echo Preparing environment in %ROOT% ...
+"%UV%" sync --project "%PROJECT%." --python 3.13
+if errorlevel 1 (
+    echo Environment setup failed.
+    pause
+    exit /b 1
+)
 
-:wrong_python
-echo.
-echo ---------------------------------------------------------------------------
-echo  The Python found is too new for the CZI reader. pylibCZIrw has prebuilt
-echo  packages only for Python 3.9 - 3.12; you need Python 3.12.
-echo ---------------------------------------------------------------------------
-echo.
-%PY% -c "import sys;print('  (found Python',sys.version.split()[0]+')')" 2>nul
-echo.
-set /p "ANS=Install Python 3.12 now with the Python manager (py install 3.12)? [Y/n] "
-if /I "%ANS%"=="n" goto :wrong_python_manual
-echo.
-py install 3.12
-if errorlevel 1 goto :wrong_python_manual
-echo.
-echo Python 3.12 installed - continuing...
-set "PY="
-for %%C in (%CANDS%) do if not defined PY ( %%~C -c "import sys" >nul 2>nul && set "PY=%%~C" )
-if defined PY goto :install_deps
+rem --- one-time: put a SABG Analyzer shortcut on the Desktop ---
+rem     resolve Desktop via .NET so a OneDrive-redirected / localized folder works;
+rem     best-effort - a shortcut failure must never block launch.
+rem     The stamp lives in the venv, not the root, because two apps can share
+rem     one root and each still needs its own shortcut.
+rem     The stamp is what keeps this off the fast path: starting PowerShell only to be
+rem     told the shortcut already exists cost a third of a second of every launch.
+rem ponytail: no IconLocation - this app ships no .ico, so the shortcut takes the
+rem     default .bat icon. Add one line here if an icon is ever drawn.
+if not exist "%UV_PROJECT_ENVIRONMENT%\.shortcut" (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+        "try {" ^
+            "$lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'SABG Analyzer.lnk';" ^
+            "if (-not (Test-Path $lnk)) {" ^
+                "$s=(New-Object -ComObject WScript.Shell).CreateShortcut($lnk);" ^
+                "$s.TargetPath='%~f0'; $s.WorkingDirectory='%~dp0';" ^
+                "$s.WindowStyle=7;" ^
+                "$s.Description='SABG Analyzer - senescence quantification from Zeiss CZI scans'; $s.Save() }" ^
+        "} catch {}"
+    echo done> "%UV_PROJECT_ENVIRONMENT%\.shortcut"
+)
 
-:wrong_python_manual
-echo.
-echo Install Python 3.12 manually, then double-click SABG_Analyzer.bat again:
-echo   python.org -^> Downloads -^> Stable Releases -^> Python 3.12.x -^> Windows
-echo   installer (64-bit), and TICK "Add python.exe to PATH".
-start "" https://www.python.org/downloads/windows/
-echo.
-pause
-goto :end
-
-:no_python
-echo ===========================================================================
-echo  SABG Analyzer needs Python, which is not installed on this PC yet.
-echo ===========================================================================
-echo.
-echo  A browser will now open the Python download page. IMPORTANT: install
-echo  Python 3.12 (NOT the newest 3.13/3.14 - the CZI reader has no prebuilt
-echo  package for those yet). Then:
-echo.
-echo    1. Under "Stable Releases", find a "Python 3.12.x" entry.
-echo    2. Download its "Windows installer (64-bit)".
-echo    3. Run it. On the FIRST screen, TICK the box at the bottom:
-echo          [x] Add python.exe to PATH
-echo    4. Click "Install Now", let it finish.
-echo    5. Close this window, then double-click SABG_Analyzer.bat again.
-echo.
-start "" https://www.python.org/downloads/windows/
-echo Press any key to close this window...
-pause >nul
-goto :end
-
-:pip_failed
-echo.
-echo Package install failed - see the messages above.
-echo If it mentions pylibCZIrw / "no matching distribution" / building a wheel,
-echo your Python is too new: install Python 3.12 (py install 3.12, or python.org
-echo -^> 3.12.x 64-bit, "Add to PATH"), then run SABG_Analyzer.bat again.
-echo Otherwise check internet / proxy.
-pause
-goto :end
-
-:abort
-echo.
-echo SABG Analyzer cannot run without those packages. Re-run when ready.
-pause
-goto :end
-
-:end
-popd 2>nul
-exit /b
+rem --- launch the GUI with pythonw (no console window) and exit ---
+start "" "%UV_PROJECT_ENVIRONMENT%\Scripts\pythonw.exe" -m sabg_gui
+exit /b 0

@@ -54,19 +54,57 @@ areas are reported in mm².
 
 ---
 
-## Install
+## Install (Windows)
 
-Requires **Python 3.10+** with `pip` available.
+No admin rights, no PATH or registry changes, and nothing written into your user profile.
 
-```powershell
-cd C:\Code\SABG_analyzer\main
-pip install -r requirements.txt
+1. On the GitHub page: **Code ▸ Download ZIP**.
+2. **Right-click the ZIP ▸ Properties ▸ tick *Unblock* ▸ OK.** Windows flags everything
+   that came from the internet, and without this step SmartScreen stops the launcher with
+   *"Windows protected your PC"*.
+3. Extract it somewhere it can stay — `C:\Users\Public\SABG_Analyzer` works for every account
+   on the machine; your Documents folder is fine too.
+4. Double-click **`SABG_Analyzer.bat`**. Nothing is asked: the Python runtime goes into the
+   **shared** folder `C:\ProgramData\PyApps`, where every tool set up this way re-uses the
+   same `uv.exe`, Python and package cache — files common to two of them are stored once
+   (hard-linked), so a second tool only costs the libraries it does not already share.
+
+   Prefer it self-contained? Run **`SABG_Analyzer.bat private`** from a terminal (or `2`) the
+   *first* time, and everything lands in `C:\Users\Public\SABG_Analyzer`, a single folder that
+   `uninstall.bat` deletes whole.
+
+   Either way it downloads [`uv`](https://github.com/astral-sh/uv), Python 3.13 and the
+   dependencies — about 700 MB on disk, a few minutes on a normal connection — and puts a
+   **SABG Analyzer** shortcut on your Desktop.
+5. From now on use the Desktop shortcut. Leave the extracted folder where it is; the
+   shortcut points at it.
+
+The choice is made once: from then on the folder on disk is the memory, so the Desktop
+shortcut and a plain double-click find it and start straight away — no argument needed
+again. Set `SABG_ANALYZER_RUNTIME` to force some other location.
+
+**Why 3.13 and not the newest Python**: the CZI reader (`pylibCZIrw`) publishes no wheel past
+3.13. The launcher fetches and pins that interpreter, and `pyproject.toml` states the bound
+(`requires-python = ">=3.12,<3.14"`), so nothing is installed by hand, no system Python is
+used, and a newer Python on the machine cannot break the app.
+
+`uninstall.bat` reverses all of it: the whole folder in the private case, only SABG Analyzer's
+own virtual environment in the shared case, so anything else using that folder keeps working.
+
+## Run it from source (any OS)
+
+```bash
+git clone https://github.com/jakubtoczek/sabg-analyzer
+cd sabg-analyzer
+uv run --project . python -m sabg_gui              # the GUI
+uv run --project . python -m sabg_analyzer scan    # or the CLI
+
+bash misc/root_test.sh       # where the launcher decides to install
+bash misc/uninstall_test.sh  # what the uninstaller removes
 ```
 
-**Brand-new PC (no Python)?** Just double-click **`SABG_Analyzer.bat`**. If Python isn't
-installed it opens the official download page with step-by-step instructions (remember to
-tick *Add python.exe to PATH* in the installer); run it again afterwards and it offers to
-install the packages above for you, then launches the GUI.
+Every `python ...` example below assumes that environment — either `uv run --project .` in
+front, or an activated venv.
 
 Outputs are written **outside this code folder** (default `..\outputs`, i.e.
 `C:\Code\SABG_analyzer\outputs`) so the repo stays clean. Override with `--out`.
