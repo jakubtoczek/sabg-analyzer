@@ -81,6 +81,8 @@ No admin rights, no PATH or registry changes, and nothing written into your user
    **SABG Analyzer** shortcut on your Desktop.
 5. From now on use the Desktop shortcut. Leave the extracted folder where it is; the
    shortcut points at it.
+   To pin it to the taskbar: right-click its taskbar button while it runs (or its Start
+   menu entry, which it keeps up to date) ▸ *Pin to taskbar*.
 
 The choice is made once: from then on the folder on disk is the memory, so the Desktop
 shortcut and a plain double-click find it and start straight away — no argument needed

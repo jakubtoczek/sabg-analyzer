@@ -13,6 +13,7 @@ set "SHARED_ROOT=C:\ProgramData\PyApps"
 set "PRIVATE_ROOT=C:\Users\Public\SABG_Analyzer"
 set "PROJECT=%~dp0"
 set "PYTHONPATH=%~dp0"
+set "ICON=%~dp0sabg_gui\assets\sabg_analyzer.ico"
 
 rem --- pick a root. No question is asked: shared unless you ask for private. ---
 rem       SABG_Analyzer.bat private   (or 2)  -> a folder only this tool uses
@@ -51,35 +52,40 @@ if not exist "%UV%" (
     )
 )
 
-rem --- install Python + dependencies (fast no-op once done) ---
-echo Preparing environment in %ROOT% ...
-"%UV%" sync --project "%PROJECT%." --python 3.13
+rem --- install Python + dependencies ---
+rem     skipped while uv.lock is the one the environment was built from: even a no-op
+rem     sync costs seconds on a cold start (antivirus scanning uv and the cache)
+fc /b "%PROJECT%uv.lock" "%UV_PROJECT_ENVIRONMENT%\.sabg_analyzer.lock" >nul 2>&1
 if errorlevel 1 (
-    echo Environment setup failed.
-    pause
-    exit /b 1
+    echo Preparing environment in %ROOT% ...
+    "%UV%" sync --project "%PROJECT%." --python 3.13
+    if errorlevel 1 (
+        echo Environment setup failed.
+        pause
+        exit /b 1
+    )
+    copy /y "%PROJECT%uv.lock" "%UV_PROJECT_ENVIRONMENT%\.sabg_analyzer.lock" >nul
 )
 
-rem --- one-time: put a SABG Analyzer shortcut on the Desktop ---
+rem --- one-time: put a SABG Analyzer shortcut (with the app icon) on the Desktop ---
 rem     resolve Desktop via .NET so a OneDrive-redirected / localized folder works;
 rem     best-effort - a shortcut failure must never block launch.
 rem     The stamp lives in the venv, not the root, because two apps can share
 rem     one root and each still needs its own shortcut.
 rem     The stamp is what keeps this off the fast path: starting PowerShell only to be
 rem     told the shortcut already exists cost a third of a second of every launch.
-rem ponytail: no IconLocation - this app ships no .ico, so the shortcut takes the
-rem     default .bat icon. Add one line here if an icon is ever drawn.
-if not exist "%UV_PROJECT_ENVIRONMENT%\.shortcut" (
+rem     Stamp .shortcut-icon and no "already there" test: shortcuts made before the app
+rem     had an icon (2026.10.9) are rewritten once to get it.
+if not exist "%UV_PROJECT_ENVIRONMENT%\.shortcut-icon" (
     powershell -NoProfile -ExecutionPolicy Bypass -Command ^
         "try {" ^
             "$lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'SABG Analyzer.lnk';" ^
-            "if (-not (Test-Path $lnk)) {" ^
                 "$s=(New-Object -ComObject WScript.Shell).CreateShortcut($lnk);" ^
                 "$s.TargetPath='%~f0'; $s.WorkingDirectory='%~dp0';" ^
-                "$s.WindowStyle=7;" ^
-                "$s.Description='SABG Analyzer - senescence quantification from Zeiss CZI scans'; $s.Save() }" ^
+                "$s.IconLocation='%ICON%'; $s.WindowStyle=7;" ^
+                "$s.Description='SABG Analyzer - senescence quantification from Zeiss CZI scans'; $s.Save()" ^
         "} catch {}"
-    echo done> "%UV_PROJECT_ENVIRONMENT%\.shortcut"
+    echo done> "%UV_PROJECT_ENVIRONMENT%\.shortcut-icon"
 )
 
 rem --- launch the GUI with pythonw (no console window) and exit ---

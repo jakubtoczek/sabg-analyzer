@@ -37,6 +37,10 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
 
 from sabg_analyzer import __version__   # cheap: package __init__ only defines the version
+from sabg_gui import winshell
+
+_PKG = Path(__file__).resolve().parent  # this package's folder
+ICON = _PKG / "assets" / "sabg_analyzer.ico"
 
 MAIN_DIR = Path(__file__).resolve().parent.parent   # repo root (holds sabg_analyzer, README, config)
 DEFAULT_DATA = (MAIN_DIR.parent / "data").resolve()
@@ -612,7 +616,13 @@ class App:
 
 
 def main() -> None:
+    winshell.taskbar_identity("SABG_Analyzer", "SABG Analyzer", _PKG.parent / "SABG_Analyzer.bat",
+                              _PKG / "assets" / "sabg_analyzer.ico")
     root = tk.Tk()
+    try:  # every window's icon; a missing file must not stop the app
+        root.iconbitmap(default=str(ICON))
+    except tk.TclError:
+        pass
     App(root)
     root.mainloop()
 
